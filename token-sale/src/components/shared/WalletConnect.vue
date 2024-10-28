@@ -15,7 +15,7 @@ import { useUserStore } from '@/stores/user';
 import { storeToRefs } from 'pinia';
 
 const userStore = useUserStore();
-const { userAddress } = storeToRefs(userStore)
+const { address: userAddress } = storeToRefs(userStore)
 
 </script>
 

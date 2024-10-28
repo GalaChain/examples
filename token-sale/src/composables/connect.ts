@@ -1,6 +1,4 @@
-import { BrowserConnectClient, TokenApi } from "@gala-chain/connect"
-import { TokenBalance, FetchBalancesDto, FetchTokenClassesDto, TokenClass } from "@gala-chain/api"
-import { plainToInstance } from "class-transformer";
+import { BrowserConnectClient, type FetchTokenClassesRequest, TokenApi, type FetchBalancesRequest } from "@gala-chain/connect"
 import BigNumber from "bignumber.js";
 
 export const useConnect = () => {
@@ -8,22 +6,14 @@ export const useConnect = () => {
   const connectClient = new BrowserConnectClient();
   const tokenApi = new TokenApi(`${galaChainBaseUri}/api/asset/token-contract`, connectClient); 
 
-  const fetchTokenBalances = async (dto: FetchBalancesDto) => {
+  const fetchTokenBalances = async (dto: FetchBalancesRequest) => {
     const response = await tokenApi.FetchBalances(dto);
-    if(response.status === 1) {
-      return plainToInstance(Array<TokenBalance>, response.data);
-    } else {
-      throw new Error(response.message);
-    }
+    return response.Data;
   }
 
-  const fetchTokenClasses = async (dto: FetchTokenClassesDto) => {
-    const response = await tokenApi.FetchTokenClasses(dto);
-    if(response.status === 1) {
-      return plainToInstance(Array<TokenClass>, response.data);
-    } else {
-      throw new Error(response.message);
-    }
+  const fetchTokenClasses = async (dto: FetchTokenClassesRequest) => {
+    const response = await tokenApi.FetchTokenClasses(dto); 
+    return response.Data;
   }
 
   const fetchTokenSaleById = async (tokenSaleId: string) => {

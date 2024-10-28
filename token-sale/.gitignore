@@ -28,5 +28,7 @@ coverage
 *.njsproj
 *.sln
 *.sw?
+.yalc
+yalc.lock
 
 *.tsbuildinfo

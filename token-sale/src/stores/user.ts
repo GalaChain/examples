@@ -27,7 +27,7 @@ export const useUserStore = defineStore('userStore', () => {
 
     return { 
         connectWallet,
-        userAddress,
+        address: userAddress,
         isConnected
     }
   })

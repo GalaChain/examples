@@ -13,23 +13,25 @@
       <h2>Tx ID: {{sale.txId}}</h2>
     </div>
   </div>
-  </template>
+</template>
   
-  <script setup lang="ts">
+<script setup lang="ts">
   import { onMounted, ref } from 'vue';
   import { useRoute } from 'vue-router';
-import { useConnect } from '../composables/connect';
-import { FetchTokenClassesDto, TokenClass } from '@gala-chain/api';
-import { plainToInstance } from 'class-transformer';
+  import { useConnect } from '../composables/connect';
+  import { useUserStore } from '../stores/user';
+  import { type FetchTokenClassesRequest, type TokenClass } from '@gala-chain/connect';
 
   const route = useRoute();
   const connect = useConnect();
+  const user = useUserStore();
   const loading = ref<boolean>(true);
   const sale = ref<any>();
   const costTokens = ref<TokenClass[]>([]);
   const saleTokens = ref<TokenClass[]>([]);
   
   onMounted(async () => {
+    await user.connectWallet();
     if(route.params.tokenSaleId) {
       await getTokenSale(route.params.tokenSaleId as string);
     } else {
@@ -41,10 +43,12 @@ import { plainToInstance } from 'class-transformer';
     try { 
       loading.value = true;
       sale.value = await connect.fetchTokenSaleById(tokenSaleId);
-      const costTokenDto = plainToInstance(FetchTokenClassesDto, {tokenClasses: sale.value.cost.map((c:any) => c.tokenClassKey)});
+      const costTokenDto: FetchTokenClassesRequest = {tokenClasses: sale.value.cost.map((c:any) => c.tokenClassKey)};
       costTokens.value = await connect.fetchTokenClasses(costTokenDto);
-      const saleTokenDto = plainToInstance(FetchTokenClassesDto, {tokenClasses: sale.value.selling.map((s:any) => s.tokenClassKey)});
-      costTokens.value = await connect.fetchTokenClasses(saleTokenDto);
+      const saleTokenDto: FetchTokenClassesRequest = {tokenClasses: sale.value.selling.map((s:any) => s.tokenClassKey)};
+      saleTokens.value = await connect.fetchTokenClasses(saleTokenDto);
+      const balances = await connect.fetchTokenBalances({owner: user.address}); 
+      console.log(balances)
     } catch (error) {
       console.error(error);
     } finally {

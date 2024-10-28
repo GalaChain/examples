@@ -11,8 +11,8 @@
     "type-check": "vue-tsc --build --force"
   },
   "dependencies": {
-    "@gala-chain/api": "^1.4.10",
-    "@gala-chain/connect": "^1.4.10",
+    "@gala-chain/api": "file:.yalc/@gala-chain/api",
+    "@gala-chain/connect": "file:.yalc/@gala-chain/connect",
     "bignumber.js": "^9.1.2",
     "class-transformer": "^0.5.1",
     "pinia": "^2.1.7",
