@@ -1,0 +1,35 @@
+:root {
+    --primary-color: #00ff9c;
+    --background-color: #0f1014;
+    --text-color: #ffffff;
+    --button-hover-color: #00cc7d;
+  }
+  
+  body {
+    background-color: var(--background-color);
+    color: var(--text-color);
+    font-family: 'Inter', sans-serif;
+  }
+  
+  .button {
+    background-color: var(--primary-color);
+    color: var(--background-color);
+    border: none;
+    padding: 10px 20px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: bold;
+    transition: background-color 0.3s ease;
+  }
+  
+  .button:hover {
+    background-color: var(--button-hover-color);
+  }
+  
+  .input {
+    background-color: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: var(--text-color);
+    padding: 10px;
+    border-radius: 4px;
+  }
