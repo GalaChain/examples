@@ -1,7 +1,5 @@
 # Dependencies
 */node_modules/
-gala-faucet-frontend/node_modules/
-gala-faucet-backend/node_modules/
 npm-debug.log
 yarn-error.log
 
@@ -13,8 +11,6 @@ build/
 .env
 .env.local
 .env.*.local
-gala-faucet-frontend/.env
-gala-faucet-backend/.env
 
 # IDE and editor files
 .vscode/
