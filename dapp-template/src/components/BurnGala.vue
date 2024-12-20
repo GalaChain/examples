@@ -67,7 +67,7 @@ async function burnTokens() {
           instance: "0"
         }
       }],
-      uniqueKey: `event-burn-${import.meta.env.VITE_PROJECT_ID}-${Date.now()}`
+      uniqueKey: `january-2025-event-${import.meta.env.VITE_PROJECT_ID}-${Date.now()}`
     }
 
     const signedBurnDto = await props.metamaskClient.sign("BurnTokens", burnTokensDto)
