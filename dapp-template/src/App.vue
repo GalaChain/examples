@@ -15,8 +15,9 @@
 
       <div v-else>
         <p class="wallet-address">Connected: {{ walletAddress }}</p>
-        <Balance :wallet-address="walletAddress" />
-        <BurnGala :wallet-address="walletAddress" :metamask-client="metamaskClient" />
+          <Balance :wallet-address="walletAddress" />
+          <BurnGala :wallet-address="walletAddress" :metamask-client="metamaskClient" />
+          <TransferGala :wallet-address="walletAddress" :metamask-client="metamaskClient" />
       </div>
     </div>
   </div>
@@ -27,6 +28,7 @@ import { ref } from 'vue'
 import { MetamaskConnectClient } from '@gala-chain/connect'
 import Balance from './components/Balance.vue'
 import BurnGala from './components/BurnGala.vue'
+import TransferGala from './components/TransferGala.vue'
 import InfoPage from './components/InfoPage.vue'
 
 const metamaskClient = new MetamaskConnectClient()
