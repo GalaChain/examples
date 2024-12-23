@@ -25,7 +25,7 @@ A lightweight application that allows users to connect their wallet, check their
    ```
    VITE_BURN_GATEWAY_API=https://gateway.mainnet.galachain.com/api/asset/token-contract
    VITE_BURN_GATEWAY_PUBLIC_KEY_API=https://gateway-mainnet.galachain.com/api/asset/public-key-contract
-   VITE_GALASWAP_API=https://api-galaswap.gala.com/v1
+   VITE_GALASWAP_API=https://api-galaswap.gala.com/galachain
    VITE_PROJECT_ID=<my project id>
    ```
 

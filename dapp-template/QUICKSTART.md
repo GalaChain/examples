@@ -147,7 +147,7 @@ Here's how to implement a token burn transaction:
 - POST `/api/asset/token-contract/BurnTokens`
 - POST `/api/asset/token-contract/FetchBalances`
 - POST `/api/asset/public-key-contract/GetPublicKey`
-- POST `https://api-galaswap.gala.com/v1/CreateHeadlessWallet`
+- POST `https://api-galaswap.gala.com/galachain/CreateHeadlessWallet`
 
 ## Block Explorer
 
