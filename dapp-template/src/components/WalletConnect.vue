@@ -44,7 +44,7 @@ const connectWallet = async () => {
 
 const checkRegistration = async () => {
   try {
-    const response = await axios.post(`${import.meta.env.VITE_BURN_GATEWAY_PUBLIC_KEY_API}/GetPublicKey`, {
+    const response = await axios.post(`${import.meta.env.VITE_GALASWAP_API}/GetPublicKey`, {
       user: walletAddress.value
     })
     isRegistered.value = !!response.data.Data

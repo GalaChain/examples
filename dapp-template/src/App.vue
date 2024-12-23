@@ -56,7 +56,7 @@ async function connectWallet() {
 }
 
 async function checkRegistration() {
-  const response = await fetch(`${import.meta.env.VITE_BURN_GATEWAY_PUBLIC_KEY_API}/GetPublicKey`, {
+  const response = await fetch(`${import.meta.env.VITE_GATEWAY_API}/GetPublicKey`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ user: walletAddress.value })
