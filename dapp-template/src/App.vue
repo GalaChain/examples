@@ -15,9 +15,46 @@
 
       <div v-else>
         <p class="wallet-address">Connected: {{ walletAddress }}</p>
-          <Balance :wallet-address="walletAddress" />
-          <BurnGala :wallet-address="walletAddress" :metamask-client="metamaskClient" />
-          <TransferGala :wallet-address="walletAddress" :metamask-client="metamaskClient" />
+        <Balance :wallet-address="walletAddress" />
+        
+        <div class="tabs">
+          <button 
+            :class="{ active: activeTab === 'burn' }" 
+            @click="activeTab = 'burn'"
+          >
+            Burn GALA
+          </button>
+          <button 
+            :class="{ active: activeTab === 'transfer' }" 
+            @click="activeTab = 'transfer'"
+          >
+            Transfer GALA
+          </button>
+          <button 
+            :class="{ active: activeTab === 'pixel-board' }" 
+            @click="activeTab = 'pixel-board'"
+          >
+            Pixel Board
+          </button>
+        </div>
+
+        <div class="tab-content">
+          <BurnGala 
+            v-if="activeTab === 'burn'"
+            :wallet-address="walletAddress" 
+            :metamask-client="metamaskClient" 
+          />
+          <TransferGala 
+            v-if="activeTab === 'transfer'"
+            :wallet-address="walletAddress" 
+            :metamask-client="metamaskClient" 
+          />
+          <PixelBoard 
+            v-if="activeTab === 'pixel-board'"
+            :wallet-address="walletAddress" 
+            :metamask-client="metamaskClient" 
+          />
+        </div>
       </div>
     </div>
   </div>
@@ -29,12 +66,14 @@ import { MetamaskConnectClient } from '@gala-chain/connect'
 import Balance from './components/Balance.vue'
 import BurnGala from './components/BurnGala.vue'
 import TransferGala from './components/TransferGala.vue'
+import PixelBoard from './components/PixelBoard.vue'
 import InfoPage from './components/InfoPage.vue'
 
 const metamaskClient = new MetamaskConnectClient()
 const isConnected = ref(false)
 const walletAddress = ref('')
 const showInfo = ref(false)
+const activeTab = ref('burn')
 
 async function connectWallet() {
   try {
@@ -111,5 +150,31 @@ async function registerUser() {
 .info-button:hover {
   background-color: var(--primary-color);
   color: var(--background-color);
+}
+
+.tabs {
+  display: flex;
+  gap: 10px;
+  margin: 20px 0;
+  justify-content: center;
+}
+
+.tabs button {
+  padding: 8px 16px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: white;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.tabs button.active {
+  background: #4CAF50;
+  color: white;
+  border-color: #4CAF50;
+}
+
+.tab-content {
+  margin-top: 20px;
 }
 </style>

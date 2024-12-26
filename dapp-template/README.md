@@ -1,45 +1,57 @@
 # GalaChain Burn dApp
 
-A lightweight application that allows users to connect their wallet, check their GALA balance, and burn GALA tokens on mainnet.
+A dApp for burning and transferring GALA tokens, featuring an interactive community pixel board.
+
+## Features
+
+- Connect wallet and burn GALA tokens
+- Transfer GALA tokens to other users
+- Interactive Community Pixel Board
+  - Draw pixels by burning GALA tokens
+  - Real-time updates across all users
+  - Each pixel costs 1 GALA to place
+  - Shared canvas persisted in Firebase
+
+## Setup
+
+1. Clone the repository
+2. Install dependencies: `npm install`
+3. Create a Firebase project:
+   - Go to [Firebase Console](https://console.firebase.google.com/)
+   - Create a new project
+   - Add a web app to get your config
+   - Create a Realtime Database
+4. Create a `.env` file with your configuration:
+   ```env
+   VITE_BURN_GATEWAY_API=https://gateway-mainnet.galachain.com/api/asset/token-contract
+   VITE_BURN_GATEWAY_PUBLIC_KEY_API=https://api-galaswap.gala.com/galachain/api/asset/public-key-contract/GetPublicKey
+   VITE_GALASWAP_API=https://api-galaswap.gala.com/galachain
+   VITE_PROJECT_ID=your_project_id
+
+   # Firebase Config
+   VITE_FIREBASE_API_KEY=your_firebase_api_key
+   VITE_FIREBASE_PROJECT_ID=your_firebase_project_id
+   VITE_FIREBASE_DATABASE_URL=your_firebase_database_url
+   ```
+5. Run the development server: `npm run dev`
+
+## Technical Implementation
+
+### Pixel Board
+The pixel board uses IPFS to store the canvas state:
+- Canvas data is stored as a binary array of RGB values
+- Each update creates a new IPFS pin
+- Canvas history is preserved through IPFS content addressing
+- Local caching improves performance
+- Updates are batched to minimize IPFS writes
+
+## Development Setup
 
 ## Prerequisites
 
 - Node.js (v14 or later)
 - npm or yarn
 - MetaMask wallet
-
-## Setup and Installation
-
-1. Clone the repository:
-   ```bash
-   git clone <repository-url>
-   cd galachain-burn-dapp
-   ```
-
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-
-3. Create a `.env` file in the root directory with the following content:
-   ```
-   VITE_BURN_GATEWAY_API=https://gateway.mainnet.galachain.com/api/asset/token-contract
-   VITE_BURN_GATEWAY_PUBLIC_KEY_API=https://gateway-mainnet.galachain.com/api/asset/public-key-contract
-   VITE_GALASWAP_API=https://api-galaswap.gala.com/galachain
-   VITE_PROJECT_ID=<my project id>
-   ```
-
-4. Start the development server:
-   ```bash
-   npm run dev
-   ```
-
-## Features
-
-- MetaMask wallet connection
-- Automatic user registration with GalaChain if needed
-- GALA token balance display (including locked amounts)
-- Token burning functionality
 
 ## Project Structure
 
