@@ -19,20 +19,39 @@
         <span>Selected Color</span>
       </div>
       
-      <div class="cost-info">
-        <span>Cost per pixel: 1 GALA</span>
+      <div class="cost-container">
+        <div class="cost-info">
+          <span class="label">Cost per pixel:</span> <span class="gala-amount">1 GALA</span>
+        </div>
+
+        <div v-if="modifiedPixels.size > 0" class="total-cost">
+          <span class="label">Total cost:</span> <span class="gala-amount">{{ modifiedPixels.size + 1 }} GALA</span>
+        </div>
       </div>
 
-      <div class="burn-preview" v-if="modifiedPixels.size > 0">
-        Total cost: {{ modifiedPixels.size }} GALA
+      <div class="action-container">
+        <div class="button-group">
+          <button 
+            @click="saveCanvas" 
+            :disabled="!hasChanges || isProcessing"
+            :class="{ 'has-pixels': hasChanges && !isProcessing }"
+          >
+            {{ isProcessing ? 'Processing...' : 'Claim Pixels' }}
+          </button>
+          <button 
+            v-if="hasChanges"
+            @click="clearUnsaved"
+            class="clear-button"
+            :disabled="isProcessing"
+          >
+            Clear
+          </button>
+        </div>
+        <div class="fee-notice">Network fee: 1 GALA</div>
+        <div v-if="statusMessage" class="status-message" :class="{ error: isError }">
+          {{ statusMessage }}
+        </div>
       </div>
-
-      <button 
-        @click="saveCanvas" 
-        :disabled="!hasChanges || isProcessing"
-      >
-        {{ isProcessing ? 'Processing...' : 'Burn GALA and Save' }}
-      </button>
     </div>
   </div>
 </template>
@@ -77,6 +96,8 @@ const selectedColor = ref('#000000')
 const hasChanges = ref(false)
 const isProcessing = ref(false)
 const modifiedPixels = ref(new Set<string>())
+const statusMessage = ref('')
+const isError = ref(false)
 
 interface PixelData {
   x: number
@@ -84,7 +105,9 @@ interface PixelData {
   color: string
 }
 
-const pixels = ref<Record<string, PixelData>>({})
+// Track saved and unsaved pixels separately
+const savedPixels = ref<Record<string, PixelData>>({})
+const unsavedPixels = ref<Record<string, PixelData>>({})
 
 onMounted(async () => {
   if (!canvas.value) return
@@ -141,7 +164,7 @@ function draw(event: MouseEvent) {
   
   // Track modified pixels with their colors
   const key = `${x},${y}`
-  pixels.value[key] = {
+  unsavedPixels.value[key] = {
     x,
     y,
     color: selectedColor.value
@@ -158,6 +181,8 @@ async function saveCanvas() {
   if (!ctx.value || !canvas.value || modifiedPixels.value.size === 0) return
   
   isProcessing.value = true
+  statusMessage.value = 'Waiting for wallet confirmation...'
+  isError.value = false
   
   try {
     // Calculate GALA cost (1 GALA per pixel)
@@ -191,30 +216,33 @@ async function saveCanvas() {
       throw new Error('Failed to burn tokens')
     }
 
-    // Get current pixels from Firebase
-    const pixelsRef = dbRef(db, 'pixels')
-    const snapshot = await get(pixelsRef)
-    const existingPixels = snapshot.val() || {}
-
-    // Merge existing pixels with new ones
+    // Merge saved and unsaved pixels
     const updates = {
-      ...existingPixels,
-      ...Object.fromEntries(
-        Array.from(modifiedPixels.value).map(key => [key, pixels.value[key]])
-      )
+      ...savedPixels.value,
+      ...unsavedPixels.value
     }
     
-    // Save merged pixels back to Firebase
-    await set(pixelsRef, updates)
+    // Save to Firebase
+    await set(dbRef(db, 'pixels'), updates)
     console.log('Pixels saved successfully')
     
-    // Clear tracking
+    // Update saved pixels
+    savedPixels.value = updates
+    
+    // Clear unsaved tracking
+    unsavedPixels.value = {}
     modifiedPixels.value.clear()
     hasChanges.value = false
     
+    statusMessage.value = 'Pixels claimed successfully!'
+    setTimeout(() => {
+      statusMessage.value = ''
+    }, 3000)
+    
   } catch (error) {
     console.error('Failed to save canvas:', error)
-    alert('Failed to save changes')
+    statusMessage.value = 'Failed to save changes'
+    isError.value = true
   } finally {
     isProcessing.value = false
   }
@@ -224,22 +252,43 @@ function loadPixels(data: Record<string, PixelData>) {
   if (!ctx.value) return
   
   try {
-    // Draw each pixel from the database
-    Object.values(data).forEach(pixel => {
+    // Store as saved pixels
+    savedPixels.value = data || {}
+    
+    // Clear canvas
+    ctx.value.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE)
+    drawGrid()
+    
+    // Draw saved pixels
+    Object.values(savedPixels.value).forEach(pixel => {
       ctx.value!.fillStyle = pixel.color
       ctx.value!.fillRect(pixel.x, pixel.y, PIXEL_SIZE, PIXEL_SIZE)
     })
-    
-    // Store loaded pixels in local state
-    pixels.value = data
-    
-    // Redraw grid
-    drawGrid()
     
     console.log('Pixels loaded successfully')
   } catch (error) {
     console.error('Failed to load pixels:', error)
   }
+}
+
+function clearUnsaved() {
+  if (!ctx.value) return
+  
+  // Clear canvas
+  ctx.value.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE)
+  drawGrid()
+  
+  // Redraw only saved pixels
+  Object.values(savedPixels.value).forEach(pixel => {
+    ctx.value!.fillStyle = pixel.color
+    ctx.value!.fillRect(pixel.x, pixel.y, PIXEL_SIZE, PIXEL_SIZE)
+  })
+  
+  // Clear unsaved tracking
+  unsavedPixels.value = {}
+  modifiedPixels.value.clear()
+  hasChanges.value = false
+  statusMessage.value = ''
 }
 </script>
 
@@ -274,7 +323,21 @@ canvas {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 5px;
+  gap: 8px;
+}
+
+.color-picker input {
+  width: 50px;
+  height: 50px;
+  padding: 0;
+  border: 2px solid #ddd;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.color-picker span {
+  font-size: 0.9em;
+  color: #666;
 }
 
 .ipfs-info {
@@ -300,10 +363,94 @@ canvas {
   border-radius: 4px;
 }
 
-.burn-preview {
-  background: #f5f5f5;
-  padding: 8px 16px;
+.cost-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 200px;
+  text-align: center;
+}
+
+.cost-info, .total-cost {
+  font-size: 0.95em;
+}
+
+.label {
+  color: #666;
+}
+
+.gala-amount {
+  font-weight: 600;
+  color: var(--primary-color, #4CAF50);
+}
+
+.action-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.fee-notice {
+  color: #666;
+  font-size: 0.85em;
+  margin-top: 4px;
+}
+
+.status-message {
+  font-size: 0.9em;
+  color: #4CAF50;
+  text-align: center;
+  min-height: 20px;
+}
+
+.status-message.error {
+  color: #f44336;
+}
+
+button {
+  padding: 10px 20px;
+  border: 1px solid #ddd;
   border-radius: 4px;
-  font-weight: bold;
+  background: #f5f5f5;
+  color: #333;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  font-size: 1em;
+  min-width: 150px;
+}
+
+button.has-pixels {
+  background: #4CAF50;
+  color: white;
+  border-color: #4CAF50;
+}
+
+button:disabled {
+  background-color: #cccccc;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+button:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.button-group {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.clear-button {
+  background: transparent;
+  border-color: #666;
+  color: #666;
+  padding: 10px 15px;
+  min-width: auto;
+}
+
+.clear-button:hover:not(:disabled) {
+  background: #f0f0f0;
 }
 </style> 
