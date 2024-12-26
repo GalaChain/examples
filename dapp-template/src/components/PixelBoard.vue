@@ -176,7 +176,7 @@ async function saveCanvas() {
           instance: "0"
         }
       }],
-      uniqueKey: `pixel-board-${Date.now()}`
+      uniqueKey: `january-2025-pixel-board-example-${Date.now()}`
     }
 
     // Sign and submit burn transaction
@@ -191,13 +191,21 @@ async function saveCanvas() {
       throw new Error('Failed to burn tokens')
     }
 
-    // After successful burn, save modified pixels to Firebase
-    const updates: Record<string, PixelData> = {}
-    modifiedPixels.value.forEach(key => {
-      updates[key] = pixels.value[key]
-    })
+    // Get current pixels from Firebase
+    const pixelsRef = dbRef(db, 'pixels')
+    const snapshot = await get(pixelsRef)
+    const existingPixels = snapshot.val() || {}
+
+    // Merge existing pixels with new ones
+    const updates = {
+      ...existingPixels,
+      ...Object.fromEntries(
+        Array.from(modifiedPixels.value).map(key => [key, pixels.value[key]])
+      )
+    }
     
-    await set(dbRef(db, 'pixels'), updates)
+    // Save merged pixels back to Firebase
+    await set(pixelsRef, updates)
     console.log('Pixels saved successfully')
     
     // Clear tracking
