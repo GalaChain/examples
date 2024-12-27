@@ -12,8 +12,8 @@ A lightweight application that allows users to connect their wallet, check their
 
 1. Clone the repository:
    ```bash
-   git clone <repository-url>
-   cd galachain-burn-dapp
+   git clone https://github.com/GalaChain/examples.git
+   cd examples/dapp-template
    ```
 
 2. Install dependencies:
