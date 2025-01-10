@@ -23,7 +23,7 @@ async function fetchBalance() {
   if (!props.walletAddress) return
   
   try {
-    const response = await fetch(`${import.meta.env.VITE_BURN_GATEWAY_API}/FetchBalances`, {
+    const response = await fetch(`${import.meta.env.VITE_GATEWAY_TOKEN_API}/FetchBalances`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

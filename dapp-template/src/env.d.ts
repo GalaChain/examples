@@ -1,9 +1,9 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
-  readonly VITE_BURN_GATEWAY_API: string
-  readonly VITE_BURN_GATEWAY_PUBLIC_KEY_API: string
-  readonly VITE_GALASWAP_API: string
+  readonly VITE_GATEWAY_TOKEN_API: string
+  readonly VITE_GALACONNECT_PUBLIC_KEY_API: string
+  readonly VITE_GALACONNECT_API: string
   readonly VITE_PROJECT_ID: string
 }
 

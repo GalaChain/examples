@@ -138,16 +138,16 @@ Here's how to implement a token burn transaction:
 ## API Endpoints Reference
 
 ### Docs
-- Authentication: `https://gateway.mainnet.galachain.com/docs/?channel=asset&contract=public-key-contract`
-- Token Operations: `https://gateway.mainnet.galachain.com/docs/?channel=asset&contract=token-contract`
+- Authentication: `https://gateway-mainnet.galachain.com/docs/?channel=asset&contract=public-key-contract`
+- Token Operations: `https://gateway-mainnet.galachain.com/docs/?channel=asset&contract=token-contract`
 - Blocks/Transactions: `https://explorer-api.galachain.com/docs`
 - GalaSwap API: `https://connect.gala.com/info/api.html`
 
 ### Common API Patterns
 - POST `/api/asset/token-contract/BurnTokens`
 - POST `/api/asset/token-contract/FetchBalances`
-- POST `/api/asset/public-key-contract/GetPublicKey`
-- POST `https://api-galaswap.gala.com/galachain/CreateHeadlessWallet`
+- POST `https://api-galaswap.gala.com/v1/CreateHeadlessWallet`
+- POST `https://api-galaswap.gala.com/galachain/api/asset/public-key-contract/GetPublicKey`
 
 ## Block Explorer
 
