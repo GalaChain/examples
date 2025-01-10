@@ -23,9 +23,9 @@ A lightweight application that allows users to connect their wallet, check their
 
 3. Create a `.env` file in the root directory with the following content:
    ```
-   VITE_BURN_GATEWAY_API=https://gateway-mainnet.galachain.com/api/asset/token-contract
-   VITE_BURN_GATEWAY_PUBLIC_KEY_API=https://gateway-mainnet.galachain.com/api/asset/public-key-contract
-   VITE_GALASWAP_API=https://api-galaswap.gala.com/galachain
+   VITE_GATEWAY_TOKEN_API=https://gateway-mainnet.galachain.com/api/asset/token-contract
+   VITE_GALACONNECT_PUBLIC_KEY_API=https://api-galaswap.gala.com/galachain/api/asset/public-key-contract
+   VITE_GALACONNECT_API=https://api-galaswap.gala.com/v1
    VITE_PROJECT_ID=<my project id>
    ```
 

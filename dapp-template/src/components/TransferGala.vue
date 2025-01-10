@@ -85,7 +85,7 @@ async function transferTokens() {
 
     const signedTransferDto = await props.metamaskClient.sign("TransferTokens", transferTokensDto)
     
-    const response = await fetch(`${import.meta.env.VITE_BURN_GATEWAY_API}/TransferToken`, {
+    const response = await fetch(`${import.meta.env.VITE_GATEWAY_TOKEN_API}/TransferToken`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(signedTransferDto)

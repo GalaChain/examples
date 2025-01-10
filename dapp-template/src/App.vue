@@ -56,7 +56,7 @@ async function connectWallet() {
 }
 
 async function checkRegistration() {
-  const response = await fetch(`${import.meta.env.VITE_GATEWAY_API}/GetPublicKey`, {
+  const response = await fetch(`${import.meta.env.VITE_GALACONNECT_PUBLIC_KEY_API}/GetPublicKey`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ user: walletAddress.value })
@@ -66,7 +66,7 @@ async function checkRegistration() {
 
 async function registerUser() {
   const publicKey = await metamaskClient.getPublicKey()
-  await fetch(`${import.meta.env.VITE_GALASWAP_API}/CreateHeadlessWallet`, {
+  await fetch(`${import.meta.env.VITE_GALACONNECT_API}/CreateHeadlessWallet`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ publicKey: publicKey.publicKey })
