@@ -1,0 +1,30 @@
+{
+  "name": "tic-tac-contract",
+  "version": "1.0.0",
+  "description": "Tic Tac Toe game using Koa.js, TypeScript, Vue.js and boardgame.io",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "start": "node dist/server/index.js"
+  },
+  "dependencies": {
+    "@gala-chain/api": "2.0.4",
+    "@gala-chain/client": "2.0.4",
+    "@koa/cors": "^5.0.0",
+    "@koa/router": "^12.0.1",
+    "boardgame.io": "^0.50.2",
+    "dotenv": "^16.4.7",
+    "koa": "^2.14.2",
+    "koa-bodyparser": "^4.4.1"
+  },
+  "devDependencies": {
+    "@types/koa": "^2.13.10",
+    "@types/koa__cors": "^5.0.0",
+    "@types/koa__router": "^12.0.3",
+    "@types/koa-bodyparser": "^4.3.12",
+    "@types/node": "^20.8.2",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.2.2"
+  }
+}

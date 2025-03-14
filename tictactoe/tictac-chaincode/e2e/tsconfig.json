@@ -1,0 +1,11 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    "strictNullChecks": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "types": ["jest", "node"]
+  }
+}

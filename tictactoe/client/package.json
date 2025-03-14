@@ -1,0 +1,28 @@
+{
+  "name": "tic-tac-contract",
+  "version": "1.0.0",
+  "description": "Tic Tac Toe game using Koa.js, TypeScript, Vue.js and boardgame.io",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "type-check": "vue-tsc --noEmit",
+    "start": "node dist/server/index.js"
+  },
+  "dependencies": {
+    "@gala-chain/api": "2.0.4",
+    "@gala-chain/connect": "2.0.4",
+    "boardgame.io": "^0.50.2",
+    "vue": "^3.3.4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^4.4.0",
+    "class-transformer": "0.5.1",
+    "class-validator": "^0.14.0",
+    "class-validator-jsonschema": "^5.0.0",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.2.2",
+    "vite": "^4.4.11",
+    "vue-tsc": "^1.8.15"
+  }
+}
