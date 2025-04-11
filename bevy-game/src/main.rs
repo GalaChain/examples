@@ -17,11 +17,15 @@ struct MnemonicText;
 #[derive(Component)]
 struct ImportButton;
 
+#[derive(Component)]
+struct ExportSeedButton;
+
 #[derive(Resource)]
 struct WalletState {
     private_key: Option<SecretKey>,
     address: Option<String>,
     mnemonic: Option<String>,
+    show_mnemonic: bool,
 }
 
 const NORMAL_BUTTON: Color = Color::srgb(0.15, 0.15, 0.15);
@@ -54,7 +58,7 @@ fn setup_ui(mut commands: Commands) {
             parent.spawn((Text::new("Address: None"), AddressText));
 
             // Mnemonic Text
-            parent.spawn((Text::new("Mnemonic: None"), MnemonicText));
+            parent.spawn((Text::new(""), MnemonicText));
 
             // Buttons container
             parent
@@ -91,6 +95,19 @@ fn setup_ui(mut commands: Commands) {
                             ..default()
                         }, BorderColor(Color::BLACK), BorderRadius::new(Val::Px(5.0), Val::Px(5.0), Val::Px(5.0), Val::Px(5.0)), BackgroundColor(NORMAL_BUTTON)))
                         .with_child((Text::new("Import Wallet"),));
+
+                    // Export Seed Button
+                    parent
+                        .spawn((Button, ExportSeedButton, Node {
+                            width: Val::Px(200.0),
+                            height: Val::Px(50.0),
+                            border: UiRect::all(Val::Px(2.0)),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            margin: UiRect::horizontal(Val::Px(5.0)),
+                            ..default()
+                        }, BorderColor(Color::BLACK), BorderRadius::new(Val::Px(5.0), Val::Px(5.0), Val::Px(5.0), Val::Px(5.0)), BackgroundColor(NORMAL_BUTTON)))
+                        .with_child((Text::new("Export Seed Phrase"),));
                 });
         });
 }
@@ -136,13 +153,14 @@ fn wallet_button_system(
                 wallet_state.private_key = Some(secret_key);
                 wallet_state.address = Some(address.clone());
                 wallet_state.mnemonic = Some(mnemonic.clone());
+                wallet_state.show_mnemonic = false;
                 
                 // Update UI text
                 if let Ok(mut text) = text_queries.p0().get_single_mut() {
                     *text = Text::new(format!("Address: {}", address));
                 }
                 if let Ok(mut text) = text_queries.p1().get_single_mut() {
-                    *text = Text::new(format!("Mnemonic: {}", mnemonic));
+                    *text = Text::new("");
                 }
                 
                 *color = PRESSED_BUTTON.into();
@@ -184,6 +202,65 @@ fn import_button_system(
     }
 }
 
+fn export_seed_button_system(
+    mut interaction_query: Query<
+        (&Interaction, &mut BackgroundColor, &mut BorderColor, &Children),
+        (Changed<Interaction>, With<ExportSeedButton>),
+    >,
+    mut text_queries: ParamSet<(
+        Query<&mut Text>,
+        Query<&mut Text, With<MnemonicText>>,
+    )>,
+    mut wallet_state: ResMut<WalletState>,
+) {
+    for (interaction, mut color, mut border_color, children) in &mut interaction_query {
+        match *interaction {
+            Interaction::Pressed => {
+                wallet_state.show_mnemonic = !wallet_state.show_mnemonic;
+                
+                // Update button text
+                if let Some(child) = children.first() {
+                    if let Ok(mut text) = text_queries.p0().get_mut(*child) {
+                        *text = Text::new(
+                            if wallet_state.show_mnemonic {
+                                "Hide Seed Phrase"
+                            } else {
+                                "Export Seed Phrase"
+                            }
+                        );
+                    }
+                }
+                
+                // Update mnemonic text
+                if let Ok(mut text) = text_queries.p1().get_single_mut() {
+                    *text = Text::new(
+                        if wallet_state.show_mnemonic {
+                            if let Some(mnemonic) = wallet_state.mnemonic.as_ref() {
+                                format!("Seed Phrase: {}", mnemonic)
+                            } else {
+                                "No wallet generated yet".to_string()
+                            }
+                        } else {
+                            "".to_string()
+                        }
+                    );
+                }
+                
+                *color = PRESSED_BUTTON.into();
+                border_color.0 = Color::srgb(1.0, 0.0, 0.0);
+            }
+            Interaction::Hovered => {
+                *color = HOVERED_BUTTON.into();
+                border_color.0 = Color::WHITE;
+            }
+            Interaction::None => {
+                *color = NORMAL_BUTTON.into();
+                border_color.0 = Color::BLACK;
+            }
+        }
+    }
+}
+
 pub struct WalletPlugin;
 
 impl Plugin for WalletPlugin {
@@ -192,8 +269,9 @@ impl Plugin for WalletPlugin {
             private_key: None,
             address: None,
             mnemonic: None,
+            show_mnemonic: false,
         })
         .add_systems(Startup, setup_ui)
-        .add_systems(Update, (wallet_button_system, import_button_system));
+        .add_systems(Update, (wallet_button_system, import_button_system, export_seed_button_system));
     }
 }
