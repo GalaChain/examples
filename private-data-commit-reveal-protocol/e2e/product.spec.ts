@@ -116,12 +116,13 @@ describe("Product contract", () => {
       commitmentNonce: nonce,
       commitmentHash: hash,
       salt,
-      bid
+      bid,
+      uniqueKey: ""
     });
 
     const response = await client.product.RevealSubmission(dto);
 
-    expect(plainToInstance(RevealSubmissionResDto, response.Data)).toEqual(expectedResponse);
+    expect(response).toEqual(transactionSuccess(expectedResponse));
   });
 });
 
@@ -135,17 +136,17 @@ function productContractAPI(client: ChainClient): IProductContractAPI & CommonCo
   return {
     ...commonContractAPI(client),
     CommitSubmission(dto: CommitSubmissionDto) {
-      return client.submitTransaction("CommitSubmission", dto) as Promise<
+      return client.submitTransaction("CommitSubmission", dto, CommitSubmissionResDto) as Promise<
         GalaChainResponse<CommitSubmissionResDto>
       >;
     },
     RevealSubmission(dto: RevealSubmissionDto) {
-      return client.submitTransaction("RevealSubmission", dto) as Promise<
+      return client.submitTransaction("RevealSubmission", dto, RevealSubmissionDto) as Promise<
         GalaChainResponse<RevealSubmissionResDto>
       >;
     },
     WithdrawSubmission(dto: WithdrawSubmissionDto) {
-      return client.submitTransaction("WithdrawSubmission", dto) as Promise<
+      return client.submitTransaction("WithdrawSubmission", dto, WithdrawSubmissionResDto) as Promise<
         GalaChainResponse<WithdrawSubmissionResDto>
       >;
     }
