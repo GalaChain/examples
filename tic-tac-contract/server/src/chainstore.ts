@@ -22,25 +22,55 @@ import {
 
 import { adminSigningKey } from "./identities";
 
+/**
+ * Configuration interface for Chainstore storage adapter
+ * 
+ * @public
+ */
 export interface ChainstoreConfig {
+  /** Base URL for the GalaChain API endpoint */
   apiUrl?: string;
+  /** Contract path for TicTac contract endpoints */
   contractPath?: string;
+  /** Custom endpoint names for contract methods */
   endpoints?: {
+    /** Endpoint for creating new matches */
     createMatch?: string;
+    /** Endpoint for updating match state */
     setMatchState?: string;
+    /** Endpoint for updating match metadata */
     setMatchMetadata?: string;
+    /** Endpoint for fetching match data */
     fetchMatch?: string;
+    /** Endpoint for listing multiple matches */
     fetchMatches?: string;
   };
 }
 
 /**
-* @description
-*
-* Storage Adapter for boardgame.io that uses GalaChain as a
-* backend. Influenced by the flatfile.ts example provided in the
-* boardgame.io project.
-*/
+ * Storage Adapter for boardgame.io that uses GalaChain as a backend
+ * 
+ * This class implements the boardgame.io Async storage interface to persist
+ * game state and metadata on the GalaChain blockchain. It handles serialization
+ * of game state to DTOs and manages HTTP requests to the chain API.
+ * 
+ * Influenced by the flatfile.ts example provided in the boardgame.io project.
+ * 
+ * @example
+ * ```typescript
+ * const chainstore = new Chainstore({
+ *   apiUrl: 'http://localhost:3000',
+ *   contractPath: '/api/product/TicTacContract'
+ * });
+ * 
+ * const server = Server({
+ *   games: [TicTacContract],
+ *   db: chainstore
+ * });
+ * ```
+ * 
+ * @public
+ */
 export class Chainstore extends Async {
   private apiUrl: string;
   private contractPath: string;
@@ -53,6 +83,11 @@ export class Chainstore extends Async {
   };
   private requestQueues: { [key: string]: Promise<any> };
 
+  /**
+   * Creates a new Chainstore instance
+   * 
+   * @param config - Optional configuration for API endpoints and paths
+   */
   constructor(config?: ChainstoreConfig) {
     super();
     this.apiUrl = config?.apiUrl ?? "http://localhost:3000";
@@ -67,6 +102,17 @@ export class Chainstore extends Async {
     this.requestQueues = {};
   }
 
+  /**
+   * Chains requests for the same key to ensure sequential execution
+   * 
+   * This prevents race conditions when multiple operations target the same match ID
+   * by ensuring requests are processed in order.
+   * 
+   * @param key - Unique identifier for the request chain (typically matchID)
+   * @param request - Async function to execute
+   * @returns Promise that resolves with the request result
+   * @private
+   */
   private async chainRequest(
     key: string,
     request: () => Promise<any>
@@ -79,12 +125,33 @@ export class Chainstore extends Async {
     return this.requestQueues[key];
   }
 
+  /**
+   * Establishes connection to the storage backend
+   * 
+   * For HTTP-based GalaChain API, this is currently a no-op.
+   * Consider implementing a health check or version endpoint query in the future.
+   * 
+   * @returns Promise that resolves when connection is established
+   * @public
+   */
   async connect(): Promise<void> {
     // No-op for HTTP API
     // todo: consider querying a health check or version endpoint of the target chain/ops deployment
     return;
   }
 
+  /**
+   * Creates a new match on the blockchain
+   * 
+   * Serializes the initial game state and metadata to GalaChain DTOs,
+   * then submits a signed transaction to create the match on-chain.
+   * 
+   * @param matchID - Unique identifier for the match
+   * @param opts - Match creation options including initial state and metadata
+   * @returns Promise that resolves when match is created
+   * @throws Error if match creation fails
+   * @public
+   */
   async createMatch(
     matchID: string,
     opts: StorageAPI.CreateMatchOpts
