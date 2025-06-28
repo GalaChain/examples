@@ -13,7 +13,9 @@ vi.mock('@gala-chain/connect', () => ({
     connect: vi.fn(),
     galaChainAddress: 'test-address-123',
     disconnect: vi.fn(),
-    isConnected: false
+    isConnected: false,
+    getPublicKey: vi.fn().mockResolvedValue('mocked-public-key'),
+    sign: vi.fn().mockResolvedValue('mocked-signature')
   }))
 }));
 
@@ -126,9 +128,10 @@ describe('checkRegistration', () => {
     await connectWallet(metamaskSupport, metamaskClient, walletAddress, isConnected);
 
     expect(fetch).toHaveBeenCalledWith(
-      expect.stringContaining('/identities/public-key/'),
+      expect.stringContaining('/GetPublicKey'),
       expect.objectContaining({
-        method: 'GET'
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
       })
     );
   });

@@ -122,3 +122,21 @@ npm run docs:serve   # Generate docs with watch mode
 - **DTOs**: Shared between server and chaincode for type safety
 - **GalaChain Patterns**: Follow GalaChain decorator and DTO conventions
 - **boardgame.io**: Standard patterns for game logic and state management
+
+## Security Guidelines
+
+### Private Key Handling
+**NEVER insert a private key into version controlled source code.** If you need to mock a user signing key for tests, create a random user using the utility provided in `@gala-chain/api`:
+
+```typescript
+// Mock the adminSigningKey
+const adminUser = ChainUser.withRandomKeys();
+jest.mock('../src/identities', () => ({
+  adminSigningKey: jest.fn(() => adminUser.privateKey)
+}));
+```
+
+This pattern ensures:
+- No hardcoded private keys in source code
+- Proper isolation between test and production keys
+- Consistent with GalaChain security best practices

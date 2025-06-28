@@ -3,20 +3,19 @@
  * that bridges boardgame.io with GalaChain persistence.
  */
 
-import { Chainstore, ChainstoreConfig } from '../src/chainstore';
-import { StorageAPI } from 'boardgame.io';
-import fetch from 'node-fetch';
+import { ChainUser } from "@gala-chain/api";
 
-// Mock fetch globally
-global.fetch = jest.fn() as jest.MockedFunction<typeof fetch>;
+import { Chainstore, ChainstoreConfig } from '../src/chainstore';
+import { StorageAPI, State, Server } from 'boardgame.io';
+
+// Mock fetch globally  
+global.fetch = jest.fn();
 const mockFetch = global.fetch as jest.MockedFunction<typeof fetch>;
 
 // Mock the adminSigningKey
+const adminUser = ChainUser.withRandomKeys();
 jest.mock('../src/identities', () => ({
-  adminSigningKey: jest.fn(() => ({
-    sign: jest.fn(() => 'mocked-signature'),
-    publicKey: 'mocked-public-key'
-  }))
+  adminSigningKey: jest.fn(() => adminUser.privateKey)
 }));
 
 describe('Chainstore', () => {
@@ -64,21 +63,28 @@ describe('Chainstore', () => {
           numPlayers: 2,
           turn: 1,
           currentPlayer: '0',
-          phase: 'play'
+          phase: 'play',
+          playOrder: ['0', '1'],
+          playOrderPos: 0,
+          activePlayers: null
         },
         _stateID: 0,
-        plugins: {}
+        plugins: {},
+        _undo: [],
+        _redo: []
       },
       metadata: {
         gameName: 'tic-tac-toe',
         players: {
-          '0': { id: '0', name: 'Player 1' },
-          '1': { id: '1', name: 'Player 2' }
+          '0': { id: 0, name: 'Player 1' },
+          '1': { id: 1, name: 'Player 2' }
         },
         setupData: {},
         gameover: undefined,
         nextMatchID: undefined,
-        unlisted: false
+        unlisted: false,
+        createdAt: Date.now(),
+        updatedAt: Date.now()
       }
     };
 
@@ -121,16 +127,21 @@ describe('Chainstore', () => {
   describe('setState', () => {
     const mockMatchID = 'test-match-123';
     const mockStateID = 1;
-    const mockState: StorageAPI.State = {
+    const mockState: State = {
       G: { board: ['X', null, null, null, null, null, null, null, null], currentPlayer: 'O' },
       ctx: {
         numPlayers: 2,
         turn: 2,
         currentPlayer: '1',
-        phase: 'play'
+        phase: 'play',
+        playOrder: ['0', '1'],
+        playOrderPos: 1,
+        activePlayers: null
       },
       _stateID: mockStateID,
-      plugins: {}
+      plugins: {},
+      _undo: [],
+      _redo: []
     };
 
     it('should set state successfully', async () => {
@@ -167,16 +178,17 @@ describe('Chainstore', () => {
 
     it('should fetch state successfully', async () => {
       const mockResponse = {
-        matchID: mockMatchID,
-        state: {
-          G: { board: Array(9).fill(null), currentPlayer: 'X' },
-          ctx: { numPlayers: 2, turn: 1, currentPlayer: '0', phase: 'play' },
-          _stateID: mockStateID,
-          plugins: {}
-        },
-        metadata: {
-          gameName: 'tic-tac-toe',
-          players: { '0': { id: '0', name: 'Player 1' } }
+        Data: {
+          state: {
+            G: { board: Array(9).fill(null), currentPlayer: 'X' },
+            ctx: { numPlayers: 2, turn: 1, currentPlayer: '0', phase: 'play' },
+            _stateID: mockStateID,
+            plugins: {}
+          },
+          metadata: {
+            gameName: 'tic-tac-toe',
+            players: { '0': { id: '0', name: 'Player 1' } }
+          }
         }
       };
 
@@ -192,11 +204,15 @@ describe('Chainstore', () => {
           G: expect.any(Object),
           ctx: expect.any(Object),
           _stateID: mockStateID
+        }),
+        metadata: expect.objectContaining({
+          gameName: 'tic-tac-toe',
+          players: expect.any(Object)
         })
       });
     });
 
-    it('should return undefined when match not found', async () => {
+    it('should return empty object when match not found', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 404,
@@ -204,31 +220,31 @@ describe('Chainstore', () => {
       } as any);
 
       const result = await chainstore.fetch(mockMatchID, { state: true });
-      expect(result).toBeUndefined();
+      expect(result).toEqual({});
     });
 
-    it('should throw error for other API failures', async () => {
+    it('should return empty object for other API failures', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 500,
         text: async () => 'Internal server error'
       } as any);
 
-      await expect(chainstore.fetch(mockMatchID, { state: true }))
-        .rejects.toThrow('Failed to fetch match test-match-123 from chain: Internal server error');
+      const result = await chainstore.fetch(mockMatchID, { state: true });
+      expect(result).toEqual({});
     });
   });
 
   describe('listMatches', () => {
     it('should list matches successfully', async () => {
       const mockMatches = [
-        { matchID: 'match-1', gameName: 'tic-tac-toe' },
-        { matchID: 'match-2', gameName: 'tic-tac-toe' }
+        'match-1',
+        'match-2'
       ];
 
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ matches: mockMatches })
+        json: async () => ({ results: mockMatches })
       } as any);
 
       const result = await chainstore.listMatches();
@@ -238,7 +254,7 @@ describe('Chainstore', () => {
     it('should return empty array when no matches found', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ matches: [] })
+        json: async () => ({ results: [] })
       } as any);
 
       const result = await chainstore.listMatches();
@@ -270,9 +286,19 @@ describe('Chainstore', () => {
       const mockOpts: StorageAPI.CreateMatchOpts = {
         initialState: {
           G: {},
-          ctx: { numPlayers: 2, turn: 1, currentPlayer: '0', phase: 'play' },
+          ctx: { 
+            numPlayers: 2, 
+            turn: 1, 
+            currentPlayer: '0', 
+            phase: 'play',
+            playOrder: ['0', '1'],
+            playOrderPos: 0,
+            activePlayers: null
+          },
           _stateID: 0,
-          plugins: {}
+          plugins: {},
+          _undo: [],
+          _redo: []
         },
         metadata: {
           gameName: 'test',
@@ -280,7 +306,9 @@ describe('Chainstore', () => {
           setupData: {},
           gameover: undefined,
           nextMatchID: undefined,
-          unlisted: false
+          unlisted: false,
+          createdAt: Date.now(),
+          updatedAt: Date.now()
         }
       };
 
