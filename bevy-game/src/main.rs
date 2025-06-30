@@ -3047,16 +3047,10 @@ impl Plugin for WalletPlugin {
             Update,
             (
                 generate_wallet_button_system,
-                export_seed_button_system,
                 import_button_system,
                 import_word_system,
                 import_confirm_system,
                 wallet_overview_system,
-                wallet_generate_system,
-                wallet_import_system,
-                wallet_export_system,
-                wallet_transfer_system,
-                wallet_burn_system,
             ).run_if(in_state(AppState::WalletMenu)),
         );
     }
