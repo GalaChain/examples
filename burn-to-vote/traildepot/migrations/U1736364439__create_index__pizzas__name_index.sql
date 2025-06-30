@@ -1,0 +1,1 @@
+CREATE INDEX _pizzas__name_index ON pizzas (name DESC);

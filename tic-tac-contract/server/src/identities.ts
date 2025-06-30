@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import { Context } from 'koa';
-import { createValidDTO, createValidSubmitDTO, RegisterEthUserDto } from '@gala-chain/api'
+import { createValidDTO, createValidSubmitDTO, ChainUser, RegisterEthUserDto } from '@gala-chain/api'
 
 import {
   GalaChainResponse,
@@ -10,9 +10,6 @@ import {
   randomUniqueKey,
   signatures
 } from "@gala-chain/api";
-import {
-  ChainUser
-} from "@gala-chain/client/lib/src/generic/ChainUser";
 
 const adminPrivateKeyPath = process.env.CHAIN_ADMIN_SECRET_KEY_PATH ?? '';
 let adminPrivateKeyString: string = "";

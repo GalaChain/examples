@@ -1,0 +1,1 @@
+CREATE INDEX _pizza_crust_styles__jumpy_lizard_index ON pizza_crust_styles (name DESC);

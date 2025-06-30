@@ -1,0 +1,10 @@
+node_modules/
+keys/
+logs/
+lib/
+test-network/
+.devcontainer/
+.dev-env
+.env
+.npmrc
+
