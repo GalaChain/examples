@@ -3,7 +3,7 @@ use bip39::{Mnemonic, Language};
 use secp256k1::{SecretKey, PublicKey};
 use rand::rngs::OsRng;
 use sha3::{Digest, Keccak256};
-use keyring::Entry;
+// use keyring::Entry; // Disabled for compatibility
 use std::error::Error as StdError;
 use std::fmt;
 use serde::{Deserialize, Serialize};
@@ -128,40 +128,47 @@ impl KeychainManager {
         }
     }
 
+    fn get_wallet_file_path(&self) -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push("bevy_galachain_wallet.json");
+        path
+    }
+
     pub fn store_wallet(&self, wallet_data: &SecureWalletData) -> Result<(), KeychainError> {
-        let entry = Entry::new(&self.service_name, &self.username)
-            .map_err(|e| KeychainError::Access(e.to_string()))?;
-
         let json_data = wallet_data.to_json()?;
+        let file_path = self.get_wallet_file_path();
         
-        entry.set_password(&json_data)
-            .map_err(|e| KeychainError::Access(e.to_string()))?;
-
-        info!("Wallet stored securely in OS keychain");
+        std::fs::write(&file_path, json_data)
+            .map_err(|e| KeychainError::Access(format!("Failed to write wallet file: {}", e)))?;
+        
+        info!("Wallet stored securely in temporary file: {:?}", file_path);
         Ok(())
     }
 
     pub fn load_wallet(&self) -> Result<SecureWalletData, KeychainError> {
-        let entry = Entry::new(&self.service_name, &self.username)
-            .map_err(|e| KeychainError::Access(e.to_string()))?;
-
-        let json_data = entry.get_password()
-            .map_err(|e| match e {
-                keyring::Error::NoEntry => KeychainError::NotFound,
-                _ => KeychainError::Access(e.to_string()),
-            })?;
-
+        let file_path = self.get_wallet_file_path();
+        
+        if !file_path.exists() {
+            return Err(KeychainError::NotFound);
+        }
+        
+        let json_data = std::fs::read_to_string(&file_path)
+            .map_err(|e| KeychainError::Access(format!("Failed to read wallet file: {}", e)))?;
+        
         SecureWalletData::from_json(&json_data)
     }
 
     pub fn delete_wallet(&self) -> Result<(), KeychainError> {
-        let entry = Entry::new(&self.service_name, &self.username)
-            .map_err(|e| KeychainError::Access(e.to_string()))?;
+        let file_path = self.get_wallet_file_path();
+        
+        if !file_path.exists() {
+            return Err(KeychainError::NotFound);
+        }
+        
+        std::fs::remove_file(&file_path)
+            .map_err(|e| KeychainError::Access(format!("Failed to delete wallet file: {}", e)))?;
 
-        entry.delete_credential()
-            .map_err(|e| KeychainError::Access(e.to_string()))?;
-
-        info!("Wallet deleted from OS keychain");
+        info!("Wallet deleted from temporary file: {:?}", file_path);
         Ok(())
     }
 
@@ -1002,6 +1009,10 @@ impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(KeychainManager::new())
             .insert_resource(GalaChainClient::new())
+            .insert_resource(ImportState::default())
+            .insert_resource(ExportState::default())
+            .insert_resource(TransferState::default())
+            .insert_resource(BurnState::default())
             .add_systems(Startup, setup_main_menu)
             .add_systems(
                 Update,
@@ -1009,6 +1020,12 @@ impl Plugin for MenuPlugin {
                     main_menu_system.run_if(in_state(AppState::MainMenu)),
                     wallet_menu_system.run_if(in_state(AppState::WalletMenu)),
                     back_button_system, // Run back button system in all states
+                    wallet_generate_system.run_if(in_state(WalletState::Generate)),
+                    wallet_import_system.run_if(in_state(WalletState::Import)),
+                    wallet_export_system.run_if(in_state(WalletState::Export)),
+                    wallet_balance_system.run_if(in_state(WalletState::Balance)),
+                    wallet_transfer_system.run_if(in_state(WalletState::Transfer)),
+                    wallet_burn_system.run_if(in_state(WalletState::Burn)),
                 ),
             )
             .add_systems(OnEnter(AppState::MainMenu), show_main_menu)
@@ -1502,120 +1519,66 @@ fn wallet_balance_system(
     wallet_state: Res<State<WalletState>>,
     mut commands: Commands,
     wallet_data: Res<WalletData>,
-    galachain_client: Res<GalaChainClient>,
     query: Query<Entity, With<ContentArea>>,
-    mut balance_task: Local<Option<bevy::tasks::Task<Result<(f64, f64), GalaChainError>>>>,
 ) {
     if wallet_state.is_changed() && *wallet_state.get() == WalletState::Balance {
-        // Update the content area, not replace the whole UI
         for entity in query.iter() {
             commands.entity(entity).despawn_descendants();
-            
-            if let Some(address) = &wallet_data.address {
-                let gala_address = GalaChainClient::ethereum_to_galachain_address(address);
-                
-                // Show loading state
-                commands.entity(entity).with_children(|parent| {
-                    parent.spawn((
-                        Text::new("GALA Token Balance"),
-                        Node {
-                            margin: UiRect::bottom(Val::Px(20.0)),
-                            ..default()
-                        },
-                    ));
+            commands.entity(entity).with_children(|parent| {
+                parent.spawn((
+                    Text::new("GALA Token Balance"),
+                    Node {
+                        margin: UiRect::bottom(Val::Px(20.0)),
+                        ..default()
+                    },
+                ));
 
+                if let Some(address) = &wallet_data.address {
+                    let gala_address = GalaChainClient::ethereum_to_galachain_address(address);
+                    
                     parent.spawn((
-                        Text::new("Loading balance..."),
+                        Text::new(format!("Wallet Address: {}", address)),
                         Node {
                             margin: UiRect::all(Val::Px(10.0)),
                             ..default()
                         },
                     ));
-                });
 
-                // Start async balance fetch
-                let client = (*galachain_client).clone();
-                let address_clone = gala_address.clone();
-                
-                *balance_task = Some(bevy::tasks::IoTaskPool::get().spawn(async move {
-                    client.get_gala_balance(&address_clone).await
-                }));
-            } else {
-                // Show no wallet message
-                commands.entity(entity).with_children(|parent| {
                     parent.spawn((
-                        Text::new("No wallet available. Please generate or import a wallet first."),
+                        Text::new(format!("GalaChain Address: {}", gala_address)),
                         Node {
                             margin: UiRect::all(Val::Px(10.0)),
                             ..default()
                         },
                     ));
-                });
-            }
-        }
-    }
 
-    // Check if balance task is complete
-    if let Some(task) = balance_task.as_mut() {
-        if let Some(result) = bevy::tasks::block_on(bevy::tasks::poll_once(task)) {
-            // Clean up task
-            *balance_task = None;
-            
-            // Clone result for use in closure
-            let balance_result = result.clone();
-            
-            // Update content area with balance result
-            for entity in query.iter() {
-                commands.entity(entity).despawn_descendants();
-                commands.entity(entity).with_children(|parent| {
                     parent.spawn((
-                        Text::new("GALA Token Balance"),
+                        Text::new("🚧 Balance Check - Reference Implementation\n\nThis demonstrates the UI for balance queries.\nIn a full implementation, this would:\n\n• Query GalaChain FetchBalances API\n• Display available and locked GALA amounts\n• Show real-time balance updates\n• Handle automatic user registration\n• Display transaction history"),
                         Node {
-                            margin: UiRect::bottom(Val::Px(20.0)),
+                            margin: UiRect::all(Val::Px(10.0)),
+                            max_width: Val::Px(600.0),
                             ..default()
                         },
                     ));
 
-                    match &balance_result {
-                        Ok((available, locked)) => {
-                            parent.spawn((
-                                Text::new(format!("Available: {:.2} GALA", available)),
-                                Node {
-                                    margin: UiRect::all(Val::Px(5.0)),
-                                    ..default()
-                                },
-                            ));
-
-                            if *locked > 0.0 {
-                                parent.spawn((
-                                    Text::new(format!("Locked: {:.2} GALA", locked)),
-                                    Node {
-                                        margin: UiRect::all(Val::Px(5.0)),
-                                        ..default()
-                                    },
-                                ));
-                            }
-
-                            parent.spawn((
-                                Text::new(format!("Total: {:.2} GALA", available + locked)),
-                                Node {
-                                    margin: UiRect::all(Val::Px(5.0)),
-                                    ..default()
-                                },
-                            ));
-                        }
-                        Err(e) => {
-                            parent.spawn((
-                                Text::new(format!("Error fetching balance: {}", e)),
-                                Node {
-                                    margin: UiRect::all(Val::Px(10.0)),
-                                    ..default()
-                                },
-                            ));
-                        }
-                    }
-                });
-            }
+                    parent.spawn((
+                        Text::new("📋 The dapp-template shows this balance pattern:\n\n• API: ${VITE_BURN_GATEWAY_API}/FetchBalances\n• Collection: \"GALA\"\n• Category: \"Unit\"\n• Owner: wallet address\n• Returns: available and locked amounts"),
+                        Node {
+                            margin: UiRect::all(Val::Px(10.0)),
+                            max_width: Val::Px(600.0),
+                            ..default()
+                        },
+                    ));
+                } else {
+                    parent.spawn((
+                        Text::new("❌ No wallet available.\nPlease generate or import a wallet first."),
+                        Node {
+                            margin: UiRect::all(Val::Px(10.0)),
+                            ..default()
+                        },
+                    ));
+                }
+            });
         }
     }
 }
@@ -1689,11 +1652,22 @@ fn wallet_registration_system(
     }
 }
 
+// New component for generate button
+#[derive(Component)]
+struct GenerateWalletButton;
+
 fn wallet_generate_system(
     wallet_state: Res<State<WalletState>>,
     mut commands: Commands,
     query: Query<Entity, With<ContentArea>>,
+    mut wallet_data: ResMut<WalletData>,
+    keychain: Res<KeychainManager>,
+    mut button_query: Query<
+        (&Interaction, &mut BackgroundColor, &mut BorderColor),
+        (Changed<Interaction>, With<GenerateWalletButton>),
+    >,
 ) {
+    // Show generate wallet UI when state changes
     if wallet_state.is_changed() && *wallet_state.get() == WalletState::Generate {
         for entity in query.iter() {
             commands.entity(entity).despawn_descendants();
@@ -1706,14 +1680,164 @@ fn wallet_generate_system(
                     },
                 ));
 
-                parent.spawn((
-                    Text::new("This feature will generate a new wallet with a secure seed phrase.\nImplementation coming soon..."),
-                    Node {
-                        margin: UiRect::all(Val::Px(10.0)),
-                        ..default()
-                    },
-                ));
+                if wallet_data.address.is_some() {
+                    parent.spawn((
+                        Text::new("⚠️ WARNING: You already have a wallet!\nGenerating a new wallet will replace your current one.\nMake sure you have backed up your current seed phrase."),
+                        Node {
+                            margin: UiRect::all(Val::Px(10.0)),
+                            ..default()
+                        },
+                    ));
+                } else {
+                    parent.spawn((
+                        Text::new("This will create a new wallet with a secure 12-word seed phrase.\nThe wallet will be stored securely in your OS keychain."),
+                        Node {
+                            margin: UiRect::all(Val::Px(10.0)),
+                            ..default()
+                        },
+                    ));
+                }
+
+                // Generate button
+                parent
+                    .spawn((
+                        Button,
+                        GenerateWalletButton,
+                        Node {
+                            width: Val::Px(200.0),
+                            height: Val::Px(50.0),
+                            border: UiRect::all(Val::Px(2.0)),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            margin: UiRect::all(Val::Px(20.0)),
+                            ..default()
+                        },
+                        BorderColor(Color::BLACK),
+                        BorderRadius::new(Val::Px(5.0), Val::Px(5.0), Val::Px(5.0), Val::Px(5.0)),
+                        BackgroundColor(Color::srgb(0.2, 0.7, 0.2)),
+                    ))
+                    .with_child(Text::new("Generate New Wallet"));
+
+                if wallet_data.address.is_some() {
+                    parent.spawn((
+                        Text::new("\nNote: Your new wallet will be automatically registered with GalaChain."),
+                        Node {
+                            margin: UiRect::all(Val::Px(10.0)),
+                            ..default()
+                        },
+                    ));
+                }
             });
+        }
+    }
+
+    // Handle generate button interactions
+    for (interaction, mut color, mut border_color) in &mut button_query {
+        match *interaction {
+            Interaction::Pressed => {
+                match generate_wallet_secure(&keychain) {
+                    Ok((secret_key, address, mnemonic)) => {
+                        wallet_data.private_key = Some(secret_key);
+                        wallet_data.address = Some(address.clone());
+                        wallet_data.mnemonic = Some(mnemonic.clone());
+                        wallet_data.show_mnemonic = false;
+
+                        // Update UI to show success
+                        for entity in query.iter() {
+                            commands.entity(entity).despawn_descendants();
+                            commands.entity(entity).with_children(|parent| {
+                                parent.spawn((
+                                    Text::new("✅ Wallet Generated Successfully!"),
+                                    Node {
+                                        margin: UiRect::bottom(Val::Px(20.0)),
+                                        ..default()
+                                    },
+                                ));
+
+                                parent.spawn((
+                                    Text::new(format!("Address: {}", address)),
+                                    Node {
+                                        margin: UiRect::all(Val::Px(10.0)),
+                                        ..default()
+                                    },
+                                ));
+
+                                parent.spawn((
+                                    Text::new("Your wallet has been securely stored in your OS keychain.\nYou can now use the other wallet operations."),
+                                    Node {
+                                        margin: UiRect::all(Val::Px(10.0)),
+                                        ..default()
+                                    },
+                                ));
+
+                                parent.spawn((
+                                    Text::new("⚠️ IMPORTANT: Use 'Export Seed' to backup your recovery phrase!"),
+                                    Node {
+                                        margin: UiRect::all(Val::Px(10.0)),
+                                        ..default()
+                                    },
+                                ));
+                            });
+                        }
+                        info!("New wallet generated: {}", address);
+                    }
+                    Err(error) => {
+                        error!("Failed to generate wallet: {}", error);
+                        // Update UI to show error
+                        for entity in query.iter() {
+                            commands.entity(entity).despawn_descendants();
+                            commands.entity(entity).with_children(|parent| {
+                                parent.spawn((
+                                    Text::new("❌ Failed to Generate Wallet"),
+                                    Node {
+                                        margin: UiRect::bottom(Val::Px(20.0)),
+                                        ..default()
+                                    },
+                                ));
+
+                                parent.spawn((
+                                    Text::new(format!("Error: {}", error)),
+                                    Node {
+                                        margin: UiRect::all(Val::Px(10.0)),
+                                        ..default()
+                                    },
+                                ));
+                            });
+                        }
+                    }
+                }
+
+                *color = Color::srgb(0.1, 0.5, 0.1).into();
+                border_color.0 = Color::srgb(1.0, 0.0, 0.0);
+            }
+            Interaction::Hovered => {
+                *color = Color::srgb(0.3, 0.8, 0.3).into();
+                border_color.0 = Color::WHITE;
+            }
+            Interaction::None => {
+                *color = Color::srgb(0.2, 0.7, 0.2).into();
+                border_color.0 = Color::BLACK;
+            }
+        }
+    }
+}
+
+// Components for import functionality
+#[derive(Component)]
+struct ImportWalletButton;
+
+#[derive(Component)]
+struct SeedWordInput(usize);
+
+#[derive(Resource)]
+struct ImportState {
+    seed_words: Vec<String>,
+}
+
+impl Default for ImportState {
+    fn default() -> Self {
+        Self {
+            seed_words: vec![String::new(); 12],
         }
     }
 }
@@ -1722,8 +1846,22 @@ fn wallet_import_system(
     wallet_state: Res<State<WalletState>>,
     mut commands: Commands,
     query: Query<Entity, With<ContentArea>>,
+    mut wallet_data: ResMut<WalletData>,
+    keychain: Res<KeychainManager>,
+    mut import_state: ResMut<ImportState>,
+    mut button_query: Query<
+        (&Interaction, &mut BackgroundColor, &mut BorderColor),
+        (Changed<Interaction>, With<ImportWalletButton>),
+    >,
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    mut word_input_query: Query<(&Interaction, &SeedWordInput, &Children), Changed<Interaction>>,
+    mut text_query: Query<&mut Text>,
 ) {
+    // Show import wallet UI when state changes
     if wallet_state.is_changed() && *wallet_state.get() == WalletState::Import {
+        // Reset import state
+        import_state.seed_words = vec![String::new(); 12];
+        
         for entity in query.iter() {
             commands.entity(entity).despawn_descendants();
             commands.entity(entity).with_children(|parent| {
@@ -1735,8 +1873,105 @@ fn wallet_import_system(
                     },
                 ));
 
+                if wallet_data.address.is_some() {
+                    parent.spawn((
+                        Text::new("⚠️ WARNING: You already have a wallet!\nImporting will replace your current wallet.\nMake sure you have backed up your current seed phrase."),
+                        Node {
+                            margin: UiRect::all(Val::Px(10.0)),
+                            ..default()
+                        },
+                    ));
+                }
+
                 parent.spawn((
-                    Text::new("This feature will allow you to import a wallet from your seed phrase.\nImplementation coming soon..."),
+                    Text::new("Enter your 12-word seed phrase below:"),
+                    Node {
+                        margin: UiRect::all(Val::Px(10.0)),
+                        ..default()
+                    },
+                ));
+
+                // Create a grid for seed word inputs
+                parent
+                    .spawn((
+                        Node {
+                            display: Display::Grid,
+                            grid_template_columns: vec![
+                                RepeatedGridTrack::fr(1, 1.0),
+                                RepeatedGridTrack::fr(1, 1.0),
+                                RepeatedGridTrack::fr(1, 1.0),
+                            ],
+                            column_gap: Val::Px(10.0),
+                            row_gap: Val::Px(10.0),
+                            margin: UiRect::all(Val::Px(10.0)),
+                            ..default()
+                        },
+                        BackgroundColor(Color::NONE),
+                    ))
+                    .with_children(|parent| {
+                        for i in 0..12 {
+                            parent
+                                .spawn((
+                                    Node {
+                                        display: Display::Flex,
+                                        flex_direction: FlexDirection::Column,
+                                        align_items: AlignItems::Center,
+                                        padding: UiRect::all(Val::Px(5.0)),
+                                        ..default()
+                                    },
+                                    BackgroundColor(Color::NONE),
+                                ))
+                                .with_children(|parent| {
+                                    parent.spawn((
+                                        Text::new(format!("Word {}:", i + 1)),
+                                        Node {
+                                            margin: UiRect::bottom(Val::Px(5.0)),
+                                            ..default()
+                                        },
+                                    ));
+                                    
+                                    parent
+                                        .spawn((
+                                            Button,
+                                            SeedWordInput(i),
+                                            Node {
+                                                width: Val::Px(120.0),
+                                                height: Val::Px(30.0),
+                                                border: UiRect::all(Val::Px(1.0)),
+                                                justify_content: JustifyContent::Center,
+                                                align_items: AlignItems::Center,
+                                                ..default()
+                                            },
+                                            BorderColor(Color::WHITE),
+                                            BackgroundColor(Color::srgb(0.2, 0.2, 0.2)),
+                                        ))
+                                        .with_child(Text::new(""));
+                                });
+                        }
+                    });
+
+                // Import button
+                parent
+                    .spawn((
+                        Button,
+                        ImportWalletButton,
+                        Node {
+                            width: Val::Px(200.0),
+                            height: Val::Px(50.0),
+                            border: UiRect::all(Val::Px(2.0)),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            margin: UiRect::all(Val::Px(20.0)),
+                            ..default()
+                        },
+                        BorderColor(Color::BLACK),
+                        BorderRadius::new(Val::Px(5.0), Val::Px(5.0), Val::Px(5.0), Val::Px(5.0)),
+                        BackgroundColor(Color::srgb(0.2, 0.2, 0.7)),
+                    ))
+                    .with_child(Text::new("Import Wallet"));
+
+                parent.spawn((
+                    Text::new("Click on word fields above and type to enter your seed phrase."),
                     Node {
                         margin: UiRect::all(Val::Px(10.0)),
                         ..default()
@@ -1745,14 +1980,218 @@ fn wallet_import_system(
             });
         }
     }
+
+    // Handle word input interactions
+    for (interaction, word_input, children) in &mut word_input_query {
+        if let Interaction::Pressed = interaction {
+            let word_index = word_input.0;
+            let mut current_word = import_state.seed_words[word_index].clone();
+
+            // Handle backspace
+            if keyboard_input.just_pressed(KeyCode::Backspace) || keyboard_input.just_pressed(KeyCode::Delete) {
+                current_word.pop();
+            }
+            // Handle space
+            else if keyboard_input.just_pressed(KeyCode::Space) {
+                // Don't allow spaces in individual words
+            }
+            // Handle letters
+            else {
+                for key_code in keyboard_input.get_just_pressed() {
+                    match key_code {
+                        KeyCode::KeyA => current_word.push('a'),
+                        KeyCode::KeyB => current_word.push('b'),
+                        KeyCode::KeyC => current_word.push('c'),
+                        KeyCode::KeyD => current_word.push('d'),
+                        KeyCode::KeyE => current_word.push('e'),
+                        KeyCode::KeyF => current_word.push('f'),
+                        KeyCode::KeyG => current_word.push('g'),
+                        KeyCode::KeyH => current_word.push('h'),
+                        KeyCode::KeyI => current_word.push('i'),
+                        KeyCode::KeyJ => current_word.push('j'),
+                        KeyCode::KeyK => current_word.push('k'),
+                        KeyCode::KeyL => current_word.push('l'),
+                        KeyCode::KeyM => current_word.push('m'),
+                        KeyCode::KeyN => current_word.push('n'),
+                        KeyCode::KeyO => current_word.push('o'),
+                        KeyCode::KeyP => current_word.push('p'),
+                        KeyCode::KeyQ => current_word.push('q'),
+                        KeyCode::KeyR => current_word.push('r'),
+                        KeyCode::KeyS => current_word.push('s'),
+                        KeyCode::KeyT => current_word.push('t'),
+                        KeyCode::KeyU => current_word.push('u'),
+                        KeyCode::KeyV => current_word.push('v'),
+                        KeyCode::KeyW => current_word.push('w'),
+                        KeyCode::KeyX => current_word.push('x'),
+                        KeyCode::KeyY => current_word.push('y'),
+                        KeyCode::KeyZ => current_word.push('z'),
+                        _ => {}
+                    }
+                }
+            }
+
+            import_state.seed_words[word_index] = current_word.clone();
+
+            // Update text display
+            if let Some(child) = children.first() {
+                if let Ok(mut text) = text_query.get_mut(*child) {
+                    *text = Text::new(current_word);
+                }
+            }
+        }
+    }
+
+    // Handle import button interactions
+    for (interaction, mut color, mut border_color) in &mut button_query {
+        match *interaction {
+            Interaction::Pressed => {
+                let mnemonic_string = import_state.seed_words.join(" ");
+                
+                match keychain.generate_wallet_from_mnemonic(&mnemonic_string) {
+                    Ok((secret_key, address)) => {
+                        // Store in keychain
+                        let secure_data = SecureWalletData {
+                            mnemonic: mnemonic_string.clone(),
+                            created_at: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_secs(),
+                        };
+
+                        match keychain.store_wallet(&secure_data) {
+                            Ok(_) => {
+                                // Update wallet state
+                                wallet_data.private_key = Some(secret_key);
+                                wallet_data.address = Some(address.clone());
+                                wallet_data.mnemonic = Some(mnemonic_string);
+
+                                // Update UI to show success
+                                for entity in query.iter() {
+                                    commands.entity(entity).despawn_descendants();
+                                    commands.entity(entity).with_children(|parent| {
+                                        parent.spawn((
+                                            Text::new("✅ Wallet Imported Successfully!"),
+                                            Node {
+                                                margin: UiRect::bottom(Val::Px(20.0)),
+                                                ..default()
+                                            },
+                                        ));
+
+                                        parent.spawn((
+                                            Text::new(format!("Address: {}", address)),
+                                            Node {
+                                                margin: UiRect::all(Val::Px(10.0)),
+                                                ..default()
+                                            },
+                                        ));
+
+                                        parent.spawn((
+                                            Text::new("Your wallet has been securely stored in your OS keychain.\nIt will be automatically registered with GalaChain."),
+                                            Node {
+                                                margin: UiRect::all(Val::Px(10.0)),
+                                                ..default()
+                                            },
+                                        ));
+                                    });
+                                }
+                                info!("Wallet imported successfully: {}", address);
+                            }
+                            Err(e) => {
+                                error!("Failed to store imported wallet: {}", e);
+                                // Update UI to show storage error
+                                for entity in query.iter() {
+                                    commands.entity(entity).despawn_descendants();
+                                    commands.entity(entity).with_children(|parent| {
+                                        parent.spawn((
+                                            Text::new("❌ Failed to Store Wallet"),
+                                            Node {
+                                                margin: UiRect::bottom(Val::Px(20.0)),
+                                                ..default()
+                                            },
+                                        ));
+
+                                        parent.spawn((
+                                            Text::new(format!("Storage error: {}", e)),
+                                            Node {
+                                                margin: UiRect::all(Val::Px(10.0)),
+                                                ..default()
+                                            },
+                                        ));
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to import wallet: {}", e);
+                        // Update UI to show import error
+                        for entity in query.iter() {
+                            commands.entity(entity).despawn_descendants();
+                            commands.entity(entity).with_children(|parent| {
+                                parent.spawn((
+                                    Text::new("❌ Failed to Import Wallet"),
+                                    Node {
+                                        margin: UiRect::bottom(Val::Px(20.0)),
+                                        ..default()
+                                    },
+                                ));
+
+                                parent.spawn((
+                                    Text::new(format!("Import error: {}\n\nPlease check that you entered all 12 words correctly.", e)),
+                                    Node {
+                                        margin: UiRect::all(Val::Px(10.0)),
+                                        ..default()
+                                    },
+                                ));
+                            });
+                        }
+                    }
+                }
+
+                *color = Color::srgb(0.1, 0.1, 0.5).into();
+                border_color.0 = Color::srgb(1.0, 0.0, 0.0);
+            }
+            Interaction::Hovered => {
+                *color = Color::srgb(0.3, 0.3, 0.8).into();
+                border_color.0 = Color::WHITE;
+            }
+            Interaction::None => {
+                *color = Color::srgb(0.2, 0.2, 0.7).into();
+                border_color.0 = Color::BLACK;
+            }
+        }
+    }
+}
+
+#[derive(Component)]
+struct ExportSeedButton;
+
+#[derive(Resource)]
+struct ExportState {
+    show_seed: bool,
+}
+
+impl Default for ExportState {
+    fn default() -> Self {
+        Self { show_seed: false }
+    }
 }
 
 fn wallet_export_system(
     wallet_state: Res<State<WalletState>>,
     mut commands: Commands,
     query: Query<Entity, With<ContentArea>>,
+    wallet_data: Res<WalletData>,
+    keychain: Res<KeychainManager>,
+    mut export_state: ResMut<ExportState>,
+    mut button_query: Query<
+        (&Interaction, &mut BackgroundColor, &mut BorderColor),
+        (Changed<Interaction>, With<ExportSeedButton>),
+    >,
 ) {
     if wallet_state.is_changed() && *wallet_state.get() == WalletState::Export {
+        export_state.show_seed = false;
+        
         for entity in query.iter() {
             commands.entity(entity).despawn_descendants();
             commands.entity(entity).with_children(|parent| {
@@ -1764,14 +2203,225 @@ fn wallet_export_system(
                     },
                 ));
 
+                if wallet_data.address.is_none() {
+                    parent.spawn((
+                        Text::new("❌ No wallet available to export.\nPlease generate or import a wallet first."),
+                        Node {
+                            margin: UiRect::all(Val::Px(10.0)),
+                            ..default()
+                        },
+                    ));
+                    return;
+                }
+
                 parent.spawn((
-                    Text::new("This feature will securely display your seed phrase for backup.\nImplementation coming soon..."),
+                    Text::new("⚠️ WARNING: Never share your seed phrase with anyone!\nYour seed phrase gives complete access to your wallet.\nStore it securely offline."),
                     Node {
                         margin: UiRect::all(Val::Px(10.0)),
                         ..default()
                     },
                 ));
+
+                // Show/Hide seed button
+                parent
+                    .spawn((
+                        Button,
+                        ExportSeedButton,
+                        Node {
+                            width: Val::Px(200.0),
+                            height: Val::Px(50.0),
+                            border: UiRect::all(Val::Px(2.0)),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            margin: UiRect::all(Val::Px(20.0)),
+                            ..default()
+                        },
+                        BorderColor(Color::BLACK),
+                        BorderRadius::new(Val::Px(5.0), Val::Px(5.0), Val::Px(5.0), Val::Px(5.0)),
+                        BackgroundColor(Color::srgb(0.2, 0.2, 0.7)),
+                    ))
+                    .with_child(Text::new(if export_state.show_seed { "Hide Seed Phrase" } else { "Show Seed Phrase" }));
+
+                // Display seed phrase if showing
+                if export_state.show_seed {
+                    match keychain.load_wallet() {
+                        Ok(secure_data) => {
+                            parent.spawn((
+                                Text::new("📝 Your Recovery Seed Phrase:"),
+                                Node {
+                                    margin: UiRect::top(Val::Px(20.0)),
+                                    ..default()
+                                },
+                            ));
+
+                            parent
+                                .spawn((
+                                    Node {
+                                        padding: UiRect::all(Val::Px(15.0)),
+                                        margin: UiRect::all(Val::Px(10.0)),
+                                        border: UiRect::all(Val::Px(2.0)),
+                                        max_width: Val::Px(600.0),
+                                        ..default()
+                                    },
+                                    BorderColor(Color::srgb(0.7, 0.7, 0.7)),
+                                    BackgroundColor(Color::srgb(0.05, 0.05, 0.05)),
+                                ))
+                                .with_child(Text::new(secure_data.mnemonic));
+
+                            parent.spawn((
+                                Text::new("💡 Write this down on paper and store it in a safe place.\nDo not save it digitally or take screenshots."),
+                                Node {
+                                    margin: UiRect::all(Val::Px(10.0)),
+                                    ..default()
+                                },
+                            ));
+                        }
+                        Err(e) => {
+                            parent.spawn((
+                                Text::new(format!("❌ Failed to load wallet from keychain: {}", e)),
+                                Node {
+                                    margin: UiRect::all(Val::Px(10.0)),
+                                    ..default()
+                                },
+                            ));
+                        }
+                    }
+                }
             });
+        }
+    }
+
+    // Handle button interactions
+    for (interaction, mut color, mut border_color) in &mut button_query {
+        match *interaction {
+            Interaction::Pressed => {
+                export_state.show_seed = !export_state.show_seed;
+                
+                // Refresh the UI
+                for entity in query.iter() {
+                    commands.entity(entity).despawn_descendants();
+                    commands.entity(entity).with_children(|parent| {
+                        parent.spawn((
+                            Text::new("Export Seed Phrase"),
+                            Node {
+                                margin: UiRect::bottom(Val::Px(20.0)),
+                                ..default()
+                            },
+                        ));
+
+                        parent.spawn((
+                            Text::new("⚠️ WARNING: Never share your seed phrase with anyone!\nYour seed phrase gives complete access to your wallet.\nStore it securely offline."),
+                            Node {
+                                margin: UiRect::all(Val::Px(10.0)),
+                                ..default()
+                            },
+                        ));
+
+                        // Show/Hide seed button
+                        parent
+                            .spawn((
+                                Button,
+                                ExportSeedButton,
+                                Node {
+                                    width: Val::Px(200.0),
+                                    height: Val::Px(50.0),
+                                    border: UiRect::all(Val::Px(2.0)),
+                                    justify_content: JustifyContent::Center,
+                                    align_items: AlignItems::Center,
+                                    margin: UiRect::all(Val::Px(20.0)),
+                                    ..default()
+                                },
+                                BorderColor(Color::BLACK),
+                                BorderRadius::new(Val::Px(5.0), Val::Px(5.0), Val::Px(5.0), Val::Px(5.0)),
+                                BackgroundColor(Color::srgb(0.2, 0.2, 0.7)),
+                            ))
+                            .with_child(Text::new(if export_state.show_seed { "Hide Seed Phrase" } else { "Show Seed Phrase" }));
+
+                        // Display seed phrase if showing
+                        if export_state.show_seed {
+                            match keychain.load_wallet() {
+                                Ok(secure_data) => {
+                                    parent.spawn((
+                                        Text::new("📝 Your Recovery Seed Phrase:"),
+                                        Node {
+                                            margin: UiRect::top(Val::Px(20.0)),
+                                            ..default()
+                                        },
+                                    ));
+
+                                    parent
+                                        .spawn((
+                                            Node {
+                                                padding: UiRect::all(Val::Px(15.0)),
+                                                margin: UiRect::all(Val::Px(10.0)),
+                                                border: UiRect::all(Val::Px(2.0)),
+                                                max_width: Val::Px(600.0),
+                                                ..default()
+                                            },
+                                            BorderColor(Color::srgb(0.7, 0.7, 0.7)),
+                                            BackgroundColor(Color::srgb(0.05, 0.05, 0.05)),
+                                        ))
+                                        .with_child(Text::new(secure_data.mnemonic));
+
+                                    parent.spawn((
+                                        Text::new("💡 Write this down on paper and store it in a safe place.\nDo not save it digitally or take screenshots."),
+                                        Node {
+                                            margin: UiRect::all(Val::Px(10.0)),
+                                            ..default()
+                                        },
+                                    ));
+                                }
+                                Err(e) => {
+                                    parent.spawn((
+                                        Text::new(format!("❌ Failed to load wallet from keychain: {}", e)),
+                                        Node {
+                                            margin: UiRect::all(Val::Px(10.0)),
+                                            ..default()
+                                        },
+                                    ));
+                                }
+                            }
+                        }
+                    });
+                }
+
+                *color = Color::srgb(0.1, 0.1, 0.5).into();
+                border_color.0 = Color::srgb(1.0, 0.0, 0.0);
+            }
+            Interaction::Hovered => {
+                *color = Color::srgb(0.3, 0.3, 0.8).into();
+                border_color.0 = Color::WHITE;
+            }
+            Interaction::None => {
+                *color = Color::srgb(0.2, 0.2, 0.7).into();
+                border_color.0 = Color::BLACK;
+            }
+        }
+    }
+}
+
+#[derive(Component)]
+struct TransferAmountInput;
+
+#[derive(Component)]
+struct TransferAddressInput;
+
+#[derive(Component)]
+struct TransferButton;
+
+#[derive(Resource)]
+struct TransferState {
+    recipient_address: String,
+    amount: String,
+    is_processing: bool,
+}
+
+impl Default for TransferState {
+    fn default() -> Self {
+        Self {
+            recipient_address: String::new(),
+            amount: String::new(),
+            is_processing: false,
         }
     }
 }
@@ -1780,8 +2430,28 @@ fn wallet_transfer_system(
     wallet_state: Res<State<WalletState>>,
     mut commands: Commands,
     query: Query<Entity, With<ContentArea>>,
+    wallet_data: Res<WalletData>,
+    mut transfer_state: ResMut<TransferState>,
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    mut address_input_query: Query<
+        (&Interaction, &Children),
+        (Changed<Interaction>, With<TransferAddressInput>),
+    >,
+    mut amount_input_query: Query<
+        (&Interaction, &Children),
+        (Changed<Interaction>, With<TransferAmountInput>, Without<TransferAddressInput>),
+    >,
+    mut transfer_button_query: Query<
+        (&Interaction, &mut BackgroundColor, &mut BorderColor),
+        (Changed<Interaction>, With<TransferButton>),
+    >,
+    mut text_query: Query<&mut Text>,
 ) {
     if wallet_state.is_changed() && *wallet_state.get() == WalletState::Transfer {
+        transfer_state.recipient_address.clear();
+        transfer_state.amount.clear();
+        transfer_state.is_processing = false;
+
         for entity in query.iter() {
             commands.entity(entity).despawn_descendants();
             commands.entity(entity).with_children(|parent| {
@@ -1793,8 +2463,119 @@ fn wallet_transfer_system(
                     },
                 ));
 
+                if wallet_data.address.is_none() {
+                    parent.spawn((
+                        Text::new("❌ No wallet available.\nPlease generate or import a wallet first."),
+                        Node {
+                            margin: UiRect::all(Val::Px(10.0)),
+                            ..default()
+                        },
+                    ));
+                    return;
+                }
+
                 parent.spawn((
-                    Text::new("This feature will allow you to transfer GALA tokens to other addresses.\nImplementation coming soon..."),
+                    Text::new("💡 NOTE: This is a reference implementation.\nTransfers would require additional GalaChain integration with proper signing."),
+                    Node {
+                        margin: UiRect::all(Val::Px(10.0)),
+                        ..default()
+                    },
+                ));
+
+                // Recipient address input
+                parent.spawn((
+                    Text::new("Recipient Address:"),
+                    Node {
+                        margin: UiRect::top(Val::Px(20.0)),
+                        ..default()
+                    },
+                ));
+
+                parent
+                    .spawn((
+                        Button,
+                        TransferAddressInput,
+                        Node {
+                            width: Val::Px(400.0),
+                            height: Val::Px(40.0),
+                            border: UiRect::all(Val::Px(2.0)),
+                            justify_content: JustifyContent::FlexStart,
+                            align_items: AlignItems::Center,
+                            padding: UiRect::all(Val::Px(10.0)),
+                            margin: UiRect::all(Val::Px(10.0)),
+                            ..default()
+                        },
+                        BorderColor(Color::WHITE),
+                        BackgroundColor(Color::srgb(0.2, 0.2, 0.2)),
+                    ))
+                    .with_child(Text::new(if transfer_state.recipient_address.is_empty() {
+                        "Click to enter recipient address..."
+                    } else {
+                        &transfer_state.recipient_address
+                    }));
+
+                // Amount input
+                parent.spawn((
+                    Text::new("Amount (GALA):"),
+                    Node {
+                        margin: UiRect::top(Val::Px(20.0)),
+                        ..default()
+                    },
+                ));
+
+                parent
+                    .spawn((
+                        Button,
+                        TransferAmountInput,
+                        Node {
+                            width: Val::Px(200.0),
+                            height: Val::Px(40.0),
+                            border: UiRect::all(Val::Px(2.0)),
+                            justify_content: JustifyContent::FlexStart,
+                            align_items: AlignItems::Center,
+                            padding: UiRect::all(Val::Px(10.0)),
+                            margin: UiRect::all(Val::Px(10.0)),
+                            ..default()
+                        },
+                        BorderColor(Color::WHITE),
+                        BackgroundColor(Color::srgb(0.2, 0.2, 0.2)),
+                    ))
+                    .with_child(Text::new(if transfer_state.amount.is_empty() {
+                        "0.0"
+                    } else {
+                        &transfer_state.amount
+                    }));
+
+                // Transfer button
+                parent
+                    .spawn((
+                        Button,
+                        TransferButton,
+                        Node {
+                            width: Val::Px(200.0),
+                            height: Val::Px(50.0),
+                            border: UiRect::all(Val::Px(2.0)),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            margin: UiRect::all(Val::Px(20.0)),
+                            ..default()
+                        },
+                        BorderColor(Color::BLACK),
+                        BorderRadius::new(Val::Px(5.0), Val::Px(5.0), Val::Px(5.0), Val::Px(5.0)),
+                        BackgroundColor(if transfer_state.is_processing { 
+                            Color::srgb(0.5, 0.5, 0.5) 
+                        } else { 
+                            Color::srgb(0.2, 0.7, 0.2) 
+                        }),
+                    ))
+                    .with_child(Text::new(if transfer_state.is_processing {
+                        "Processing..."
+                    } else {
+                        "Transfer Tokens"
+                    }));
+
+                parent.spawn((
+                    Text::new("⚠️ Network fee: 1 GALA\n📝 Click on input fields above to enter values"),
                     Node {
                         margin: UiRect::all(Val::Px(10.0)),
                         ..default()
@@ -1803,14 +2584,235 @@ fn wallet_transfer_system(
             });
         }
     }
+
+    // Handle address input
+    for (interaction, children) in &mut address_input_query {
+        if let Interaction::Pressed = interaction {
+            // Handle keyboard input for address
+            for key_code in keyboard_input.get_just_pressed() {
+                match key_code {
+                    KeyCode::Backspace | KeyCode::Delete => {
+                        transfer_state.recipient_address.pop();
+                    }
+                    KeyCode::KeyA | KeyCode::KeyB | KeyCode::KeyC | KeyCode::KeyD | KeyCode::KeyE |
+                    KeyCode::KeyF | KeyCode::KeyG | KeyCode::KeyH | KeyCode::KeyI | KeyCode::KeyJ |
+                    KeyCode::KeyK | KeyCode::KeyL | KeyCode::KeyM | KeyCode::KeyN | KeyCode::KeyO |
+                    KeyCode::KeyP | KeyCode::KeyQ | KeyCode::KeyR | KeyCode::KeyS | KeyCode::KeyT |
+                    KeyCode::KeyU | KeyCode::KeyV | KeyCode::KeyW | KeyCode::KeyX | KeyCode::KeyY |
+                    KeyCode::KeyZ => {
+                        if let Some(char) = key_to_char(*key_code) {
+                            transfer_state.recipient_address.push(char);
+                        }
+                    }
+                    KeyCode::Digit0 | KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3 | KeyCode::Digit4 |
+                    KeyCode::Digit5 | KeyCode::Digit6 | KeyCode::Digit7 | KeyCode::Digit8 | KeyCode::Digit9 => {
+                        if let Some(char) = key_to_char(*key_code) {
+                            transfer_state.recipient_address.push(char);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // Update text display
+            if let Some(child) = children.first() {
+                if let Ok(mut text) = text_query.get_mut(*child) {
+                    *text = Text::new(if transfer_state.recipient_address.is_empty() {
+                        "Click to enter recipient address..."
+                    } else {
+                        &transfer_state.recipient_address
+                    });
+                }
+            }
+        }
+    }
+
+    // Handle amount input
+    for (interaction, children) in &mut amount_input_query {
+        if let Interaction::Pressed = interaction {
+            // Handle keyboard input for amount
+            for key_code in keyboard_input.get_just_pressed() {
+                match key_code {
+                    KeyCode::Backspace | KeyCode::Delete => {
+                        transfer_state.amount.pop();
+                    }
+                    KeyCode::Digit0 | KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3 | KeyCode::Digit4 |
+                    KeyCode::Digit5 | KeyCode::Digit6 | KeyCode::Digit7 | KeyCode::Digit8 | KeyCode::Digit9 => {
+                        if let Some(char) = key_to_char(*key_code) {
+                            transfer_state.amount.push(char);
+                        }
+                    }
+                    KeyCode::Period => {
+                        if !transfer_state.amount.contains('.') {
+                            transfer_state.amount.push('.');
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // Update text display
+            if let Some(child) = children.first() {
+                if let Ok(mut text) = text_query.get_mut(*child) {
+                    *text = Text::new(if transfer_state.amount.is_empty() {
+                        "0.0"
+                    } else {
+                        &transfer_state.amount
+                    });
+                }
+            }
+        }
+    }
+
+    // Handle transfer button
+    for (interaction, mut color, mut border_color) in &mut transfer_button_query {
+        match *interaction {
+            Interaction::Pressed => {
+                if !transfer_state.is_processing && 
+                   !transfer_state.recipient_address.is_empty() && 
+                   !transfer_state.amount.is_empty() {
+                    
+                    transfer_state.is_processing = true;
+                    
+                    // Simulate transfer process
+                    info!("Transfer requested: {} GALA to {}", transfer_state.amount, transfer_state.recipient_address);
+                    
+                    // Update UI to show result
+                    for entity in query.iter() {
+                        commands.entity(entity).despawn_descendants();
+                        commands.entity(entity).with_children(|parent| {
+                            parent.spawn((
+                                Text::new("Transfer Result"),
+                                Node {
+                                    margin: UiRect::bottom(Val::Px(20.0)),
+                                    ..default()
+                                },
+                            ));
+
+                            parent.spawn((
+                                Text::new("🚧 Transfer Feature - Reference Implementation\n\nThis demonstrates the UI for token transfers.\nIn a full implementation, this would:\n\n• Validate the recipient address\n• Check your GALA balance\n• Create and sign a transfer transaction\n• Submit to GalaChain network\n• Show transaction confirmation"),
+                                Node {
+                                    margin: UiRect::all(Val::Px(10.0)),
+                                    max_width: Val::Px(600.0),
+                                    ..default()
+                                },
+                            ));
+
+                            parent.spawn((
+                                Text::new(format!("Requested Transfer:\n• Amount: {} GALA\n• To: {}\n• From: {}", 
+                                    transfer_state.amount,
+                                    transfer_state.recipient_address,
+                                    wallet_data.address.as_ref().unwrap_or(&"Unknown".to_string())
+                                )),
+                                Node {
+                                    margin: UiRect::all(Val::Px(10.0)),
+                                    max_width: Val::Px(600.0),
+                                    ..default()
+                                },
+                            ));
+                        });
+                    }
+                }
+
+                *color = Color::srgb(0.1, 0.5, 0.1).into();
+                border_color.0 = Color::srgb(1.0, 0.0, 0.0);
+            }
+            Interaction::Hovered => {
+                *color = Color::srgb(0.3, 0.8, 0.3).into();
+                border_color.0 = Color::WHITE;
+            }
+            Interaction::None => {
+                *color = Color::srgb(0.2, 0.7, 0.2).into();
+                border_color.0 = Color::BLACK;
+            }
+        }
+    }
+}
+
+fn key_to_char(key_code: KeyCode) -> Option<char> {
+    match key_code {
+        KeyCode::KeyA => Some('a'),
+        KeyCode::KeyB => Some('b'),
+        KeyCode::KeyC => Some('c'),
+        KeyCode::KeyD => Some('d'),
+        KeyCode::KeyE => Some('e'),
+        KeyCode::KeyF => Some('f'),
+        KeyCode::KeyG => Some('g'),
+        KeyCode::KeyH => Some('h'),
+        KeyCode::KeyI => Some('i'),
+        KeyCode::KeyJ => Some('j'),
+        KeyCode::KeyK => Some('k'),
+        KeyCode::KeyL => Some('l'),
+        KeyCode::KeyM => Some('m'),
+        KeyCode::KeyN => Some('n'),
+        KeyCode::KeyO => Some('o'),
+        KeyCode::KeyP => Some('p'),
+        KeyCode::KeyQ => Some('q'),
+        KeyCode::KeyR => Some('r'),
+        KeyCode::KeyS => Some('s'),
+        KeyCode::KeyT => Some('t'),
+        KeyCode::KeyU => Some('u'),
+        KeyCode::KeyV => Some('v'),
+        KeyCode::KeyW => Some('w'),
+        KeyCode::KeyX => Some('x'),
+        KeyCode::KeyY => Some('y'),
+        KeyCode::KeyZ => Some('z'),
+        KeyCode::Digit0 => Some('0'),
+        KeyCode::Digit1 => Some('1'),
+        KeyCode::Digit2 => Some('2'),
+        KeyCode::Digit3 => Some('3'),
+        KeyCode::Digit4 => Some('4'),
+        KeyCode::Digit5 => Some('5'),
+        KeyCode::Digit6 => Some('6'),
+        KeyCode::Digit7 => Some('7'),
+        KeyCode::Digit8 => Some('8'),
+        KeyCode::Digit9 => Some('9'),
+        _ => None,
+    }
+}
+
+#[derive(Component)]
+struct BurnAmountInput;
+
+#[derive(Component)]
+struct BurnButton;
+
+#[derive(Resource)]
+struct BurnState {
+    amount: String,
+    is_processing: bool,
+}
+
+impl Default for BurnState {
+    fn default() -> Self {
+        Self {
+            amount: String::new(),
+            is_processing: false,
+        }
+    }
 }
 
 fn wallet_burn_system(
     wallet_state: Res<State<WalletState>>,
     mut commands: Commands,
     query: Query<Entity, With<ContentArea>>,
+    wallet_data: Res<WalletData>,
+    mut burn_state: ResMut<BurnState>,
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    mut amount_input_query: Query<
+        (&Interaction, &Children),
+        (Changed<Interaction>, With<BurnAmountInput>),
+    >,
+    mut burn_button_query: Query<
+        (&Interaction, &mut BackgroundColor, &mut BorderColor),
+        (Changed<Interaction>, With<BurnButton>),
+    >,
+    mut text_query: Query<&mut Text>,
 ) {
     if wallet_state.is_changed() && *wallet_state.get() == WalletState::Burn {
+        burn_state.amount.clear();
+        burn_state.is_processing = false;
+
         for entity in query.iter() {
             commands.entity(entity).despawn_descendants();
             commands.entity(entity).with_children(|parent| {
@@ -1822,14 +2824,209 @@ fn wallet_burn_system(
                     },
                 ));
 
+                if wallet_data.address.is_none() {
+                    parent.spawn((
+                        Text::new("❌ No wallet available.\nPlease generate or import a wallet first."),
+                        Node {
+                            margin: UiRect::all(Val::Px(10.0)),
+                            ..default()
+                        },
+                    ));
+                    return;
+                }
+
                 parent.spawn((
-                    Text::new("This feature will allow you to burn GALA tokens permanently.\nImplementation coming soon..."),
+                    Text::new("⚠️ WARNING: Burning tokens is PERMANENT and IRREVERSIBLE!\nTokens will be destroyed forever and cannot be recovered."),
+                    Node {
+                        margin: UiRect::all(Val::Px(10.0)),
+                        ..default()
+                    },
+                ));
+
+                parent.spawn((
+                    Text::new("💡 NOTE: This is a reference implementation based on the dapp-template.\nReal burning would require proper GalaChain integration."),
+                    Node {
+                        margin: UiRect::all(Val::Px(10.0)),
+                        ..default()
+                    },
+                ));
+
+                // Amount input
+                parent.spawn((
+                    Text::new("Amount to Burn (GALA):"),
+                    Node {
+                        margin: UiRect::top(Val::Px(20.0)),
+                        ..default()
+                    },
+                ));
+
+                parent
+                    .spawn((
+                        Button,
+                        BurnAmountInput,
+                        Node {
+                            width: Val::Px(200.0),
+                            height: Val::Px(40.0),
+                            border: UiRect::all(Val::Px(2.0)),
+                            justify_content: JustifyContent::FlexStart,
+                            align_items: AlignItems::Center,
+                            padding: UiRect::all(Val::Px(10.0)),
+                            margin: UiRect::all(Val::Px(10.0)),
+                            ..default()
+                        },
+                        BorderColor(Color::WHITE),
+                        BackgroundColor(Color::srgb(0.2, 0.2, 0.2)),
+                    ))
+                    .with_child(Text::new(if burn_state.amount.is_empty() {
+                        "0.0"
+                    } else {
+                        &burn_state.amount
+                    }));
+
+                // Burn button
+                parent
+                    .spawn((
+                        Button,
+                        BurnButton,
+                        Node {
+                            width: Val::Px(200.0),
+                            height: Val::Px(50.0),
+                            border: UiRect::all(Val::Px(2.0)),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            margin: UiRect::all(Val::Px(20.0)),
+                            ..default()
+                        },
+                        BorderColor(Color::BLACK),
+                        BorderRadius::new(Val::Px(5.0), Val::Px(5.0), Val::Px(5.0), Val::Px(5.0)),
+                        BackgroundColor(if burn_state.is_processing { 
+                            Color::srgb(0.5, 0.5, 0.5) 
+                        } else { 
+                            Color::srgb(0.8, 0.2, 0.2) 
+                        }),
+                    ))
+                    .with_child(Text::new(if burn_state.is_processing {
+                        "Processing..."
+                    } else {
+                        "🔥 Burn Tokens"
+                    }));
+
+                parent.spawn((
+                    Text::new("⚠️ Network fee: 1 GALA\n📝 Click on amount field above to enter value\n🔥 Tokens will be permanently destroyed"),
                     Node {
                         margin: UiRect::all(Val::Px(10.0)),
                         ..default()
                     },
                 ));
             });
+        }
+    }
+
+    // Handle amount input
+    for (interaction, children) in &mut amount_input_query {
+        if let Interaction::Pressed = interaction {
+            // Handle keyboard input for amount
+            for key_code in keyboard_input.get_just_pressed() {
+                match key_code {
+                    KeyCode::Backspace | KeyCode::Delete => {
+                        burn_state.amount.pop();
+                    }
+                    KeyCode::Digit0 | KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3 | KeyCode::Digit4 |
+                    KeyCode::Digit5 | KeyCode::Digit6 | KeyCode::Digit7 | KeyCode::Digit8 | KeyCode::Digit9 => {
+                        if let Some(char) = key_to_char(*key_code) {
+                            burn_state.amount.push(char);
+                        }
+                    }
+                    KeyCode::Period => {
+                        if !burn_state.amount.contains('.') {
+                            burn_state.amount.push('.');
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // Update text display
+            if let Some(child) = children.first() {
+                if let Ok(mut text) = text_query.get_mut(*child) {
+                    *text = Text::new(if burn_state.amount.is_empty() {
+                        "0.0"
+                    } else {
+                        &burn_state.amount
+                    });
+                }
+            }
+        }
+    }
+
+    // Handle burn button
+    for (interaction, mut color, mut border_color) in &mut burn_button_query {
+        match *interaction {
+            Interaction::Pressed => {
+                if !burn_state.is_processing && !burn_state.amount.is_empty() {
+                    
+                    burn_state.is_processing = true;
+                    
+                    // Simulate burn process
+                    info!("Burn requested: {} GALA from {}", burn_state.amount, wallet_data.address.as_ref().unwrap_or(&"Unknown".to_string()));
+                    
+                    // Update UI to show result
+                    for entity in query.iter() {
+                        commands.entity(entity).despawn_descendants();
+                        commands.entity(entity).with_children(|parent| {
+                            parent.spawn((
+                                Text::new("Burn Result"),
+                                Node {
+                                    margin: UiRect::bottom(Val::Px(20.0)),
+                                    ..default()
+                                },
+                            ));
+
+                            parent.spawn((
+                                Text::new("🚧 Burn Feature - Reference Implementation\n\nThis demonstrates the UI for token burning based on the dapp-template.\nIn a full implementation, this would:\n\n• Validate the burn amount against your balance\n• Create a signed burn transaction\n• Submit to GalaChain with BurnTokens API\n• Show transaction confirmation\n• Update your balance"),
+                                Node {
+                                    margin: UiRect::all(Val::Px(10.0)),
+                                    max_width: Val::Px(600.0),
+                                    ..default()
+                                },
+                            ));
+
+                            parent.spawn((
+                                Text::new(format!("Requested Burn:\n• Amount: {} GALA\n• From: {}\n• Unique Key: january-2025-event-{}", 
+                                    burn_state.amount,
+                                    wallet_data.address.as_ref().unwrap_or(&"Unknown".to_string()),
+                                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()
+                                )),
+                                Node {
+                                    margin: UiRect::all(Val::Px(10.0)),
+                                    max_width: Val::Px(600.0),
+                                    ..default()
+                                },
+                            ));
+
+                            parent.spawn((
+                                Text::new("📋 The dapp-template shows this burn pattern:\n\n• Collection: \"GALA\"\n• Category: \"Unit\"\n• Type: \"none\"\n• Instance: \"0\"\n• Signature via MetaMask integration"),
+                                Node {
+                                    margin: UiRect::all(Val::Px(10.0)),
+                                    max_width: Val::Px(600.0),
+                                    ..default()
+                                },
+                            ));
+                        });
+                    }
+                }
+
+                *color = Color::srgb(0.5, 0.1, 0.1).into();
+                border_color.0 = Color::srgb(1.0, 0.0, 0.0);
+            }
+            Interaction::Hovered => {
+                *color = Color::srgb(0.9, 0.3, 0.3).into();
+                border_color.0 = Color::WHITE;
+            }
+            Interaction::None => {
+                *color = Color::srgb(0.8, 0.2, 0.2).into();
+                border_color.0 = Color::BLACK;
+            }
         }
     }
 }
@@ -1855,8 +3052,6 @@ impl Plugin for WalletPlugin {
                 import_word_system,
                 import_confirm_system,
                 wallet_overview_system,
-                wallet_balance_system,
-                wallet_registration_system,
                 wallet_generate_system,
                 wallet_import_system,
                 wallet_export_system,

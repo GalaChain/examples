@@ -11,8 +11,8 @@ rand = "0.8.5"
 hex = "0.4.3"
 sha3 = "0.10.8"
 
-# Secure storage
-keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
+# Secure storage - disabled for compatibility
+# keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
 # TODO: Add secure memory protection later
 # secrets = "1.2"
 
