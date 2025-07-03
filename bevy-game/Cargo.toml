@@ -11,8 +11,8 @@ rand = "0.8.5"
 hex = "0.4.3"
 sha3 = "0.10.8"
 
-# Secure storage - disabled for compatibility
-# keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
+# Secure storage - production keychain integration
+keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
 # TODO: Add secure memory protection later
 # secrets = "1.2"
 
@@ -21,6 +21,9 @@ reqwest = { version = "0.11", features = ["json"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1", features = ["rt-multi-thread"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 [profile.dev]
 opt-level = 1

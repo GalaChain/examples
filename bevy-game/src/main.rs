@@ -3,7 +3,7 @@ use bip39::{Mnemonic, Language};
 use secp256k1::{SecretKey, PublicKey};
 use rand::rngs::OsRng;
 use sha3::{Digest, Keccak256};
-// use keyring::Entry; // Disabled for compatibility
+use keyring::Entry;
 use std::error::Error as StdError;
 use std::fmt;
 use serde::{Deserialize, Serialize};
@@ -129,47 +129,44 @@ impl KeychainManager {
         }
     }
 
-    fn get_wallet_file_path(&self) -> std::path::PathBuf {
-        let mut path = std::env::temp_dir();
-        path.push("bevy_galachain_wallet.json");
-        path
-    }
 
     pub fn store_wallet(&self, wallet_data: &SecureWalletData) -> Result<(), KeychainError> {
         let json_data = wallet_data.to_json()?;
-        let file_path = self.get_wallet_file_path();
         
-        std::fs::write(&file_path, json_data)
-            .map_err(|e| KeychainError::Access(format!("Failed to write wallet file: {}", e)))?;
+        let entry = Entry::new(&self.service_name, &self.username)
+            .map_err(|e| KeychainError::Access(format!("Failed to create keychain entry: {}", e)))?;
         
-        info!("Wallet stored securely in temporary file: {:?}", file_path);
+        entry.set_password(&json_data)
+            .map_err(|e| KeychainError::Access(format!("Failed to store wallet in keychain: {}", e)))?;
+        
+        info!("Wallet stored securely in OS keychain service: {}", self.service_name);
         Ok(())
     }
 
     pub fn load_wallet(&self) -> Result<SecureWalletData, KeychainError> {
-        let file_path = self.get_wallet_file_path();
+        let entry = Entry::new(&self.service_name, &self.username)
+            .map_err(|e| KeychainError::Access(format!("Failed to create keychain entry: {}", e)))?;
         
-        if !file_path.exists() {
-            return Err(KeychainError::NotFound);
-        }
-        
-        let json_data = std::fs::read_to_string(&file_path)
-            .map_err(|e| KeychainError::Access(format!("Failed to read wallet file: {}", e)))?;
+        let json_data = entry.get_password()
+            .map_err(|e| match e {
+                keyring::Error::NoEntry => KeychainError::NotFound,
+                _ => KeychainError::Access(format!("Failed to load wallet from keychain: {}", e)),
+            })?;
         
         SecureWalletData::from_json(&json_data)
     }
 
     pub fn delete_wallet(&self) -> Result<(), KeychainError> {
-        let file_path = self.get_wallet_file_path();
+        let entry = Entry::new(&self.service_name, &self.username)
+            .map_err(|e| KeychainError::Access(format!("Failed to create keychain entry: {}", e)))?;
         
-        if !file_path.exists() {
-            return Err(KeychainError::NotFound);
-        }
-        
-        std::fs::remove_file(&file_path)
-            .map_err(|e| KeychainError::Access(format!("Failed to delete wallet file: {}", e)))?;
+        entry.delete_credential()
+            .map_err(|e| match e {
+                keyring::Error::NoEntry => KeychainError::NotFound,
+                _ => KeychainError::Access(format!("Failed to delete wallet from keychain: {}", e)),
+            })?;
 
-        info!("Wallet deleted from temporary file: {:?}", file_path);
+        info!("Wallet deleted from OS keychain service: {}", self.service_name);
         Ok(())
     }
 
@@ -280,6 +277,21 @@ pub struct RegistrationRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct GetPublicKeyResponse {
+    #[serde(rename = "Status")]
+    pub status: i32,
+    #[serde(rename = "Data")]
+    pub data: Option<PublicKeyData>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PublicKeyData {
+    #[serde(rename = "publicKey")]
+    pub public_key: String,
+    pub signing: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TokenInstance {
     pub quantity: String,
     #[serde(rename = "tokenInstanceKey")]
@@ -310,12 +322,32 @@ pub struct GalaChainClient {
     client: Client,
     pub operations_api: String,
     pub identity_api: String,
+    pub settings: ApiSettings,
 }
 
 #[derive(Resource, Clone)]
 pub struct ApiSettings {
+    // Base URLs for the servers
     pub operations_base_url: String,
     pub identity_base_url: String,
+    
+    // Configurable API endpoints
+    /// Registration endpoint path (e.g., "/api/identities/register")
+    pub registration_endpoint: String,
+    /// Balance endpoint template with placeholders (e.g., "/api/product/{channel}/{contract}/FetchBalances")
+    pub balance_endpoint: String,
+    
+    // Blockchain configuration
+    /// Smart contract name for token operations (e.g., "GalaChainToken")
+    pub contract_name: String,
+    /// Smart contract name for identity operations (e.g., "PublicKeyContract")
+    pub identity_contract_name: String,
+    /// Channel name (e.g., "product")
+    pub channel_name: String,
+    /// Token collection name (e.g., "GALA")
+    pub token_collection: String,
+    /// Registration check endpoint (e.g., "/api/product/{channel}/{contract}/GetPublicKey")
+    pub registration_check_endpoint: String,
 }
 
 impl Default for ApiSettings {
@@ -323,6 +355,14 @@ impl Default for ApiSettings {
         Self {
             operations_base_url: "http://localhost:3000".to_string(),
             identity_base_url: "http://localhost:4000".to_string(),
+            // Default endpoints based on API documentation
+            registration_endpoint: "/api/{channel}/{contract}/RegisterEthUser".to_string(),
+            registration_check_endpoint: "/api/{channel}/{contract}/GetPublicKey".to_string(),
+            balance_endpoint: "/api/{channel}/{contract}/FetchBalances".to_string(),
+            contract_name: "GalaChainToken".to_string(),  // For balance operations
+            identity_contract_name: "PublicKeyContract".to_string(),  // For identity operations
+            channel_name: "product".to_string(),
+            token_collection: "GALA".to_string(),
         }
     }
 }
@@ -338,108 +378,305 @@ impl GalaChainClient {
             client,
             operations_api: settings.operations_base_url.clone(),
             identity_api: settings.identity_base_url.clone(),
+            settings: settings.clone(),
         }
     }
+    
+    // Helper method to build the registration URL
+    pub fn get_registration_url(&self) -> String {
+        let endpoint = self.settings.registration_endpoint
+            .replace("{channel}", &self.settings.channel_name)
+            .replace("{contract}", &self.settings.identity_contract_name);
+        let url = format!("{}{}", self.operations_api, endpoint);
+        info!("🔗 Built registration URL: {}", url);
+        url
+    }
+    
+    // Helper method to build the registration check URL (GetPublicKey)
+    pub fn get_registration_check_url(&self) -> String {
+        let endpoint = self.settings.registration_check_endpoint
+            .replace("{channel}", &self.settings.channel_name)
+            .replace("{contract}", &self.settings.identity_contract_name);
+        format!("{}{}", self.operations_api, endpoint)  // Use operations API for GetPublicKey
+    }
+    
+    // Helper method to build the balance URL
+    pub fn get_balance_url(&self) -> String {
+        let endpoint = self.settings.balance_endpoint
+            .replace("{channel}", &self.settings.channel_name)
+            .replace("{contract}", &self.settings.contract_name);
+        format!("{}{}", self.identity_api, endpoint)
+    }
 
-    // Check if user is registered with GalaChain
-    pub async fn check_registration(&self, public_key: &str) -> Result<bool, GalaChainError> {
-        let url = format!("{}/identities/check", self.identity_api);
+    // Helper method for retry logic
+    async fn retry_request<F, Fut, T>(&self, operation: F, max_retries: u32) -> Result<T, GalaChainError>
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = Result<T, GalaChainError>>,
+    {
+        let mut last_error = None;
+        
+        for attempt in 0..=max_retries {
+            match operation().await {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    last_error = Some(e);
+                    if attempt < max_retries {
+                        // Simple delay without Tokio dependency
+                        let delay_ms = (1000 << attempt) as u64; // 1s, 2s, 4s in milliseconds
+                        std::thread::sleep(Duration::from_millis(delay_ms));
+                        info!("Request failed, retrying in {}ms (attempt {}/{})", delay_ms, attempt + 1, max_retries + 1);
+                    }
+                }
+            }
+        }
+        
+        Err(last_error.unwrap())
+    }
+
+    // Blocking wrapper for HTTP requests that creates its own Tokio runtime
+    fn run_with_tokio<F, R>(&self, future: F) -> R
+    where
+        F: std::future::Future<Output = R> + Send + 'static,
+        R: Send + 'static,
+    {
+        // Create a new Tokio runtime for this operation
+        let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
+        rt.block_on(future)
+    }
+
+    // Check if user is registered with GalaChain by attempting a test operation
+    // Note: The server doesn't have a direct check endpoint, so we use balance fetch as a proxy
+    pub fn check_registration_blocking(&self, gala_address: &str) -> Result<bool, GalaChainError> {
+        let client = self.clone();
+        let address = gala_address.to_string();
+        self.run_with_tokio(async move {
+            client.check_registration_async(address).await
+        })
+    }
+
+    async fn check_registration_async(&self, gala_address: String) -> Result<bool, GalaChainError> {
+        let request = PublicKeyRequest {
+            user: gala_address.clone(),
+        };
+
+        info!("🔍 Checking registration with GetPublicKey for: {}", gala_address);
+        info!("📍 URL: {}", self.get_registration_check_url());
+
+        self.retry_request(|| async {
+            let response = self
+                .client
+                .post(self.get_registration_check_url())
+                .json(&request)
+                .send()
+                .await
+                .map_err(|e| {
+                    if e.is_timeout() {
+                        GalaChainError::Network("Request timeout".to_string())
+                    } else if e.is_connect() {
+                        GalaChainError::Network(format!("Connection failed: {}", e))
+                    } else {
+                        GalaChainError::Network(e.to_string())
+                    }
+                })?;
+
+            let status_code = response.status();
+            info!("📡 GetPublicKey response status: {}", status_code);
+            
+            if response.status().is_success() {
+                // Parse the GetPublicKey response
+                let get_pk_response: GetPublicKeyResponse = response
+                    .json()
+                    .await
+                    .map_err(|e| GalaChainError::Parse(format!("Failed to parse GetPublicKey response: {}", e)))?;
+                
+                info!("📋 GetPublicKey response - Status: {}, Has Data: {}", 
+                      get_pk_response.status, get_pk_response.data.is_some());
+                
+                // Status 1 means success, and if we have data, user is registered
+                if get_pk_response.status == 1 && get_pk_response.data.is_some() {
+                    info!("✅ User is registered!");
+                    Ok(true)
+                } else {
+                    info!("❌ User is not registered (Status: {}, Data present: {})", 
+                          get_pk_response.status, get_pk_response.data.is_some());
+                    Ok(false)
+                }
+            } else if response.status() == 404 {
+                // 404 means user not found, so not registered
+                Ok(false)
+            } else {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                info!("⚠️ GetPublicKey failed - Status: {}, Body: {}", status, body);
+                
+                // Check if the error indicates user doesn't exist
+                if body.contains("not found") || body.contains("does not exist") || status == 400 {
+                    info!("👤 User not found - treating as not registered");
+                    Ok(false)
+                } else {
+                    Err(GalaChainError::Api(format!(
+                        "Registration check failed with status {}: {}", 
+                        status, 
+                        body
+                    )))
+                }
+            }
+        }, 2).await // Use fewer retries for registration checks
+    }
+
+    // Register user with GalaChain (blocking version)
+    pub fn register_user_blocking(&self, public_key: &str) -> Result<(), GalaChainError> {
+        let client = self.clone();
+        let key = public_key.to_string();
+        self.run_with_tokio(async move {
+            client.register_user_async(key).await
+        })
+    }
+
+    async fn register_user_async(&self, public_key: String) -> Result<(), GalaChainError> {
+        let url = self.get_registration_url();
         let request_body = serde_json::json!({
             "publicKey": public_key
         });
 
-        let response = self
-            .client
-            .post(&url)
-            .json(&request_body)
-            .send()
-            .await
-            .map_err(|e| GalaChainError::Network(e.to_string()))?;
+        self.retry_request(|| async {
+            let response = self
+                .client
+                .post(&url)
+                .json(&request_body)
+                .send()
+                .await
+                .map_err(|e| {
+                    if e.is_timeout() {
+                        GalaChainError::Network("Request timeout".to_string())
+                    } else if e.is_connect() {
+                        GalaChainError::Network(format!("Connection failed: {}", e))
+                    } else {
+                        GalaChainError::Network(e.to_string())
+                    }
+                })?;
 
-        if response.status().is_success() {
-            Ok(true)
-        } else if response.status() == 404 {
-            Ok(false) // User not registered
-        } else {
-            let status = response.status();
-            Err(GalaChainError::Api(format!("Registration check failed with status: {}", status)))
-        }
+            if response.status().is_success() {
+                Ok(())
+            } else {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                Err(GalaChainError::Api(format!(
+                    "Registration failed with status {}: {}", 
+                    status, 
+                    body
+                )))
+            }
+        }, 3).await
     }
 
-    // Register user with GalaChain
-    pub async fn register_user(&self, public_key: &str) -> Result<(), GalaChainError> {
-        let url = format!("{}/identities/register", self.identity_api);
-        let request_body = serde_json::json!({
-            "publicKey": public_key
-        });
-
-        let response = self
-            .client
-            .post(&url)
-            .json(&request_body)
-            .send()
-            .await
-            .map_err(|e| GalaChainError::Network(e.to_string()))?;
-
-        if response.status().is_success() {
-            Ok(())
-        } else {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            Err(GalaChainError::Api(format!(
-                "Registration failed with status {}: {}", 
-                status, 
-                body
-            )))
-        }
+    // Get token balance (blocking version)
+    pub fn get_gala_balance_blocking(&self, gala_address: &str) -> Result<(f64, f64), GalaChainError> {
+        let client = self.clone();
+        let address = gala_address.to_string();
+        self.run_with_tokio(async move {
+            client.get_gala_balance_async(address).await
+        })
     }
 
-    // Get GALA token balance
-    pub async fn get_gala_balance(&self, gala_address: &str) -> Result<(f64, f64), GalaChainError> {
+    async fn get_gala_balance_async(&self, gala_address: String) -> Result<(f64, f64), GalaChainError> {
         let request = BalanceRequest {
-            owner: gala_address.to_string(),
-            collection: "GALA".to_string(),
+            owner: gala_address,
+            collection: self.settings.token_collection.clone(),
             category: "Unit".to_string(),
             r#type: "none".to_string(),
             additional_key: "none".to_string(),
             instance: "0".to_string(),
         };
 
-        let response = self
-            .client
-            .post(format!("{}/api/product/FetchBalances", self.operations_api))
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| GalaChainError::Network(e.to_string()))?;
+        self.retry_request(|| async {
+            let response = self
+                .client
+                .post(self.get_balance_url())
+                .json(&request)
+                .send()
+                .await
+                .map_err(|e| {
+                    if e.is_timeout() {
+                        GalaChainError::Network("Balance request timeout".to_string())
+                    } else if e.is_connect() {
+                        GalaChainError::Network(format!("Failed to connect to identity API: {}", e))
+                    } else {
+                        GalaChainError::Network(e.to_string())
+                    }
+                })?;
 
-        let balance_response: BalanceResponse = response
-            .json()
-            .await
-            .map_err(|e| GalaChainError::Parse(e.to_string()))?;
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                return Err(GalaChainError::Api(format!(
+                    "Balance request failed with status {}: {}", 
+                    status, 
+                    body
+                )));
+            }
 
-        if let Some(balance) = balance_response.data.first() {
-            let total = balance.quantity.parse::<f64>()
-                .map_err(|e| GalaChainError::Parse(e.to_string()))?;
-            
-            let locked: f64 = balance.locked_holds
-                .iter()
-                .map(|hold| hold.quantity.parse::<f64>().unwrap_or(0.0))
-                .sum();
+            let balance_response: BalanceResponse = response
+                .json()
+                .await
+                .map_err(|e| GalaChainError::Parse(format!("Failed to parse balance response: {}", e)))?;
 
-            Ok((total - locked, locked))
-        } else {
-            Ok((0.0, 0.0))
-        }
+            if let Some(balance) = balance_response.data.first() {
+                let total = balance.quantity.parse::<f64>()
+                    .map_err(|e| GalaChainError::Parse(format!("Invalid balance quantity: {}", e)))?;
+                
+                let locked: f64 = balance.locked_holds
+                    .iter()
+                    .map(|hold| hold.quantity.parse::<f64>().unwrap_or(0.0))
+                    .sum();
+
+                Ok((total - locked, locked))
+            } else {
+                Ok((0.0, 0.0))
+            }
+        }, 3).await
     }
 
-    // Convert Ethereum address to GalaChain format
+    // Convert Ethereum address to GalaChain format with proper checksumming
     pub fn ethereum_to_galachain_address(eth_address: &str) -> String {
-        if eth_address.starts_with("0x") {
-            format!("eth|{}", &eth_address[2..])
+        let addr = if eth_address.starts_with("0x") {
+            &eth_address[2..]
         } else {
-            format!("eth|{}", eth_address)
+            eth_address
+        };
+        
+        // Apply EIP-55 checksumming
+        let checksummed = Self::to_checksum_address(addr);
+        format!("eth|{}", checksummed)
+    }
+    
+    // EIP-55 Ethereum address checksumming
+    fn to_checksum_address(address: &str) -> String {
+        let address = address.to_lowercase();
+        let hash = {
+            let mut hasher = Keccak256::new();
+            hasher.update(address.as_bytes());
+            hex::encode(hasher.finalize())
+        };
+        
+        let mut result = String::new();
+        for (i, c) in address.chars().enumerate() {
+            if c.is_ascii_hexdigit() && c.is_alphabetic() {
+                if let Some(hash_char) = hash.chars().nth(i) {
+                    if hash_char >= '8' {
+                        result.push(c.to_ascii_uppercase());
+                    } else {
+                        result.push(c);
+                    }
+                } else {
+                    result.push(c);
+                }
+            } else {
+                result.push(c);
+            }
         }
+        result
     }
 
     // Get public key from private key
@@ -1042,6 +1279,7 @@ impl Plugin for MenuPlugin {
             .insert_resource(GalaChainClient::new(&api_settings))
             .insert_resource(BalanceState::default())
             .insert_resource(RegistrationState::default())
+            .insert_resource(AsyncTasks::default())
             .insert_resource(ImportState::default())
             .insert_resource(ExportState::default())
             .insert_resource(TransferState::default())
@@ -1053,6 +1291,7 @@ impl Plugin for MenuPlugin {
                     main_menu_system.run_if(in_state(AppState::MainMenu)),
                     wallet_menu_system.run_if(in_state(AppState::WalletMenu)),
                     back_button_system, // Run back button system in all states
+                    async_task_polling_system, // Run async polling in all states
                     wallet_generate_system.run_if(in_state(WalletState::Generate)),
                     wallet_import_system.run_if(in_state(WalletState::Import)),
                     wallet_export_system.run_if(in_state(WalletState::Export)),
@@ -1664,11 +1903,29 @@ impl Default for RegistrationState {
     }
 }
 
+#[derive(Resource)]
+struct AsyncTasks {
+    balance_task: Option<bevy::tasks::Task<Result<(f64, f64), GalaChainError>>>,
+    registration_check_task: Option<bevy::tasks::Task<Result<bool, GalaChainError>>>,
+    registration_task: Option<bevy::tasks::Task<Result<(), GalaChainError>>>,
+}
+
+impl Default for AsyncTasks {
+    fn default() -> Self {
+        Self {
+            balance_task: None,
+            registration_check_task: None,
+            registration_task: None,
+        }
+    }
+}
+
 fn wallet_balance_system(
     wallet_state: Res<State<WalletState>>,
     mut commands: Commands,
     wallet_data: Res<WalletData>,
     mut balance_state: ResMut<BalanceState>,
+    mut async_tasks: ResMut<AsyncTasks>,
     query: Query<Entity, With<ContentArea>>,
     mut refresh_button_query: Query<
         (&Interaction, &mut BackgroundColor, &mut BorderColor),
@@ -1831,92 +2088,14 @@ fn wallet_balance_system(
                         info!("Balance refresh requested for address: {}", gala_address);
                         info!("Calling: {}/api/product/FetchBalances", client.operations_api);
                         
-                        // Spawn async task
-                        let _balance_task = bevy::tasks::IoTaskPool::get().spawn(async move {
-                            client.get_gala_balance(&gala_address).await
-                        });
-                        
-                        // For now, simulate to avoid async complexity in the system
-                        // In production, you'd poll this task in a separate system
-                        balance_state.loading = false;
-                        balance_state.available = 42.50; // Simulated - would come from balance_task result
-                        balance_state.locked = 0.0;
-                        balance_state.last_updated = Some(std::time::SystemTime::now());
-                        
-                        // Refresh the UI to show new balance
-                        for entity in query.iter() {
-                            commands.entity(entity).despawn_descendants();
-                            commands.entity(entity).with_children(|parent| {
-                                parent.spawn((
-                                    Text::new("GALA Token Balance"),
-                                    Node {
-                                        margin: UiRect::bottom(Val::Px(20.0)),
-                                        ..default()
-                                    },
-                                ));
-
-                                parent.spawn((
-                                    Text::new(format!("Wallet Address: {}", address)),
-                                    Node {
-                                        margin: UiRect::all(Val::Px(10.0)),
-                                        ..default()
-                                    },
-                                ));
-
-                                parent.spawn((
-                                    Text::new(format!("Available: {:.2} GALA", balance_state.available)),
-                                    Node {
-                                        margin: UiRect::all(Val::Px(5.0)),
-                                        ..default()
-                                    },
-                                ));
-
-                                parent.spawn((
-                                    Text::new(format!("Total: {:.2} GALA", balance_state.available + balance_state.locked)),
-                                    Node {
-                                        margin: UiRect::all(Val::Px(5.0)),
-                                        ..default()
-                                    },
-                                ));
-
-                                parent.spawn((
-                                    Text::new("✅ Balance fetched successfully (simulated)"),
-                                    Node {
-                                        margin: UiRect::all(Val::Px(10.0)),
-                                        ..default()
-                                    },
-                                ));
-
-                                // Refresh button
-                                parent
-                                    .spawn((
-                                        Button,
-                                        RefreshBalanceButton,
-                                        Node {
-                                            width: Val::Px(200.0),
-                                            height: Val::Px(50.0),
-                                            border: UiRect::all(Val::Px(2.0)),
-                                            justify_content: JustifyContent::Center,
-                                            align_items: AlignItems::Center,
-                                            margin: UiRect::all(Val::Px(20.0)),
-                                            ..default()
-                                        },
-                                        BorderColor(Color::BLACK),
-                                        BorderRadius::new(Val::Px(5.0), Val::Px(5.0), Val::Px(5.0), Val::Px(5.0)),
-                                        BackgroundColor(Color::srgb(0.2, 0.7, 0.2)),
-                                    ))
-                                    .with_child(Text::new("Refresh Balance"));
-
-                                parent.spawn((
-                                    Text::new("💡 This will make an HTTP call to your configured GalaChain Operations API endpoint"),
-                                    Node {
-                                        margin: UiRect::all(Val::Px(10.0)),
-                                        max_width: Val::Px(500.0),
-                                        ..default()
-                                    },
-                                ));
-                            });
-                        }
+                        // Spawn task using blocking method
+                        info!("Creating balance task for address: {}", gala_address);
+                        async_tasks.balance_task = Some(bevy::tasks::IoTaskPool::get().spawn(async move {
+                            info!("Balance task executing HTTP request to: {}", client.get_balance_url());
+                            let result = client.get_gala_balance_blocking(&gala_address);
+                            info!("Balance task completed with result: {:?}", result);
+                            result
+                        }));
                     }
                 }
 
@@ -1953,7 +2132,7 @@ fn wallet_registration_system(
             let address_clone = gala_address.clone();
             
             *registration_check_task = Some(bevy::tasks::IoTaskPool::get().spawn(async move {
-                client.check_registration(&address_clone).await
+                client.check_registration_blocking(&address_clone)
             }));
         }
     }
@@ -1974,7 +2153,7 @@ fn wallet_registration_system(
                         let client = (*galachain_client).clone();
                         
                         *registration_task = Some(bevy::tasks::IoTaskPool::get().spawn(async move {
-                            client.register_user(&public_key).await
+                            client.register_user_blocking(&public_key)
                         }));
                     } else if is_registered {
                         info!("User is already registered with GalaChain");
@@ -2010,6 +2189,7 @@ fn wallet_registration_ui_system(
     query: Query<Entity, With<ContentArea>>,
     wallet_data: Res<WalletData>,
     mut registration_state: ResMut<RegistrationState>,
+    mut async_tasks: ResMut<AsyncTasks>,
     mut check_button_query: Query<
         (&Interaction, &mut BackgroundColor, &mut BorderColor),
         (Changed<Interaction>, With<CheckRegistrationButton>),
@@ -2020,12 +2200,18 @@ fn wallet_registration_ui_system(
     >,
     galachain_client: Res<GalaChainClient>,
 ) {
-    // Show registration UI when state changes
-    if wallet_state.is_changed() && *wallet_state.get() == WalletState::Registration {
+    // Show registration UI when state changes or registration state updates
+    let entering_registration = wallet_state.is_changed() && *wallet_state.get() == WalletState::Registration;
+    let registration_state_changed = registration_state.is_changed() && *wallet_state.get() == WalletState::Registration;
+    
+    if entering_registration {
         // Reset registration state when entering registration view
         registration_state.checking = false;
         registration_state.registering = false;
         registration_state.error = None;
+    }
+    
+    if entering_registration || registration_state_changed {
 
         for entity in query.iter() {
             commands.entity(entity).despawn_descendants();
@@ -2217,17 +2403,10 @@ fn wallet_registration_ui_system(
                         
                         info!("Checking registration status for address: {}", gala_address);
                         
-                        // Spawn async task to check registration
-                        let _check_task = bevy::tasks::IoTaskPool::get().spawn(async move {
-                            client.check_registration(&gala_address).await
-                        });
-                        
-                        // For now, simulate the response to avoid async complexity
-                        registration_state.checking = false;
-                        registration_state.is_registered = Some(false); // Simulated - not registered
-                        registration_state.last_checked = Some(std::time::SystemTime::now());
-                        
-                        info!("Registration check completed (simulated): Not registered");
+                        // Spawn task to check registration using blocking method
+                        async_tasks.registration_check_task = Some(bevy::tasks::IoTaskPool::get().spawn(async move {
+                            client.check_registration_blocking(&gala_address)
+                        }));
                     }
                 }
 
@@ -2259,17 +2438,10 @@ fn wallet_registration_ui_system(
                         
                         info!("Registering identity with public key: {}", public_key);
                         
-                        // Spawn async task to register
-                        let _register_task = bevy::tasks::IoTaskPool::get().spawn(async move {
-                            client.register_user(&public_key).await
-                        });
-                        
-                        // For now, simulate the response to avoid async complexity
-                        registration_state.registering = false;
-                        registration_state.is_registered = Some(true); // Simulated - now registered
-                        registration_state.last_checked = Some(std::time::SystemTime::now());
-                        
-                        info!("Identity registration completed (simulated): Success");
+                        // Spawn task to register using blocking method
+                        async_tasks.registration_task = Some(bevy::tasks::IoTaskPool::get().spawn(async move {
+                            client.register_user_blocking(&public_key)
+                        }));
                     }
                 }
 
@@ -2283,6 +2455,87 @@ fn wallet_registration_ui_system(
             Interaction::None => {
                 *color = Color::srgb(0.2, 0.7, 0.2).into();
                 border_color.0 = Color::BLACK;
+            }
+        }
+    }
+}
+
+fn async_task_polling_system(
+    mut async_tasks: ResMut<AsyncTasks>,
+    mut balance_state: ResMut<BalanceState>,
+    mut registration_state: ResMut<RegistrationState>,
+) {
+    // Debug: Check if we have any active tasks
+    let has_balance_task = async_tasks.balance_task.is_some();
+    let has_reg_check_task = async_tasks.registration_check_task.is_some();
+    let has_reg_task = async_tasks.registration_task.is_some();
+    
+    if has_balance_task || has_reg_check_task || has_reg_task {
+        info!("Polling tasks - Balance: {}, RegCheck: {}, Reg: {}", has_balance_task, has_reg_check_task, has_reg_task);
+    }
+
+    // Poll balance task
+    if let Some(task) = async_tasks.balance_task.as_mut() {
+        if let Some(result) = bevy::tasks::block_on(bevy::tasks::poll_once(task)) {
+            async_tasks.balance_task = None;
+            balance_state.loading = false;
+            
+            match result {
+                Ok((available, locked)) => {
+                    balance_state.available = available;
+                    balance_state.locked = locked;
+                    balance_state.last_updated = Some(std::time::SystemTime::now());
+                    balance_state.error = None;
+                    info!("Balance fetched successfully: {:.2} available, {:.2} locked", available, locked);
+                }
+                Err(e) => {
+                    balance_state.error = Some(e.to_string());
+                    error!("Failed to fetch balance: {}", e);
+                }
+            }
+        }
+    }
+
+    // Poll registration check task
+    if let Some(task) = async_tasks.registration_check_task.as_mut() {
+        if let Some(result) = bevy::tasks::block_on(bevy::tasks::poll_once(task)) {
+            async_tasks.registration_check_task = None;
+            registration_state.checking = false;
+            
+            info!("Registration check task completed, processing result...");
+            
+            match result {
+                Ok(is_registered) => {
+                    registration_state.is_registered = Some(is_registered);
+                    registration_state.last_checked = Some(std::time::SystemTime::now());
+                    registration_state.error = None;
+                    info!("✅ Registration check completed: {}", if is_registered { "registered" } else { "not registered" });
+                }
+                Err(e) => {
+                    registration_state.error = Some(e.to_string());
+                    error!("❌ Registration check failed: {}", e);
+                }
+            }
+        }
+    }
+
+    // Poll registration task
+    if let Some(task) = async_tasks.registration_task.as_mut() {
+        if let Some(result) = bevy::tasks::block_on(bevy::tasks::poll_once(task)) {
+            async_tasks.registration_task = None;
+            registration_state.registering = false;
+            
+            match result {
+                Ok(_) => {
+                    registration_state.is_registered = Some(true);
+                    registration_state.last_checked = Some(std::time::SystemTime::now());
+                    registration_state.error = None;
+                    info!("Identity registration completed successfully");
+                }
+                Err(e) => {
+                    registration_state.error = Some(e.to_string());
+                    error!("Failed to register identity: {}", e);
+                }
             }
         }
     }
