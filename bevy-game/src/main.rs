@@ -460,13 +460,17 @@ impl GalaChainClient {
             user: gala_address.clone(),
         };
 
+        let url = self.get_registration_check_url();
+        let request_body = serde_json::to_string_pretty(&request).unwrap_or_default();
+        
         info!("🔍 Checking registration with GetPublicKey for: {}", gala_address);
-        info!("📍 URL: {}", self.get_registration_check_url());
+        info!("📍 Request URL: {}", url);
+        info!("📤 Request Body: {}", request_body);
 
         self.retry_request(|| async {
             let response = self
                 .client
-                .post(self.get_registration_check_url())
+                .post(&url)
                 .json(&request)
                 .send()
                 .await
@@ -481,16 +485,17 @@ impl GalaChainClient {
                 })?;
 
             let status_code = response.status();
-            info!("📡 GetPublicKey response status: {}", status_code);
+            let response_body = response.text().await.unwrap_or_default();
             
-            if response.status().is_success() {
+            info!("📡 GetPublicKey Response Status: {}", status_code);
+            info!("📥 Response Body: {}", response_body);
+            
+            if status_code.is_success() {
                 // Parse the GetPublicKey response
-                let get_pk_response: GetPublicKeyResponse = response
-                    .json()
-                    .await
+                let get_pk_response: GetPublicKeyResponse = serde_json::from_str(&response_body)
                     .map_err(|e| GalaChainError::Parse(format!("Failed to parse GetPublicKey response: {}", e)))?;
                 
-                info!("📋 GetPublicKey response - Status: {}, Has Data: {}", 
+                info!("📋 Parsed GetPublicKey response - Status: {}, Has Data: {}", 
                       get_pk_response.status, get_pk_response.data.is_some());
                 
                 // Status 1 means success, and if we have data, user is registered
@@ -502,23 +507,21 @@ impl GalaChainClient {
                           get_pk_response.status, get_pk_response.data.is_some());
                     Ok(false)
                 }
-            } else if response.status() == 404 {
+            } else if status_code == 404 {
                 // 404 means user not found, so not registered
                 Ok(false)
             } else {
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                info!("⚠️ GetPublicKey failed - Status: {}, Body: {}", status, body);
+                info!("⚠️ GetPublicKey failed - Status: {}, Body: {}", status_code, response_body);
                 
                 // Check if the error indicates user doesn't exist
-                if body.contains("not found") || body.contains("does not exist") || status == 400 {
+                if response_body.contains("not found") || response_body.contains("does not exist") || status_code == 400 {
                     info!("👤 User not found - treating as not registered");
                     Ok(false)
                 } else {
                     Err(GalaChainError::Api(format!(
                         "Registration check failed with status {}: {}", 
-                        status, 
-                        body
+                        status_code, 
+                        response_body
                     )))
                 }
             }
@@ -539,6 +542,11 @@ impl GalaChainClient {
         let request_body = serde_json::json!({
             "publicKey": public_key
         });
+        let request_body_str = serde_json::to_string_pretty(&request_body).unwrap_or_default();
+
+        info!("🔐 Registering user with RegisterEthUser");
+        info!("📍 Request URL: {}", url);
+        info!("📤 Request Body: {}", request_body_str);
 
         self.retry_request(|| async {
             let response = self
@@ -557,15 +565,21 @@ impl GalaChainClient {
                     }
                 })?;
 
-            if response.status().is_success() {
+            let status_code = response.status();
+            let response_body = response.text().await.unwrap_or_default();
+            
+            info!("📡 RegisterEthUser Response Status: {}", status_code);
+            info!("📥 Response Body: {}", response_body);
+            
+            if status_code.is_success() {
+                info!("✅ User registration successful!");
                 Ok(())
             } else {
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
+                error!("❌ Registration failed with status {}: {}", status_code, response_body);
                 Err(GalaChainError::Api(format!(
                     "Registration failed with status {}: {}", 
-                    status, 
-                    body
+                    status_code, 
+                    response_body
                 )))
             }
         }, 3).await
@@ -582,7 +596,7 @@ impl GalaChainClient {
 
     async fn get_gala_balance_async(&self, gala_address: String) -> Result<(f64, f64), GalaChainError> {
         let request = BalanceRequest {
-            owner: gala_address,
+            owner: gala_address.clone(),
             collection: self.settings.token_collection.clone(),
             category: "Unit".to_string(),
             r#type: "none".to_string(),
@@ -590,10 +604,17 @@ impl GalaChainClient {
             instance: "0".to_string(),
         };
 
+        let url = self.get_balance_url();
+        let request_body_str = serde_json::to_string_pretty(&request).unwrap_or_default();
+        
+        info!("💰 Fetching balance with FetchBalances for: {}", gala_address);
+        info!("📍 Request URL: {}", url);
+        info!("📤 Request Body: {}", request_body_str);
+
         self.retry_request(|| async {
             let response = self
                 .client
-                .post(self.get_balance_url())
+                .post(&url)
                 .json(&request)
                 .send()
                 .await
@@ -607,19 +628,22 @@ impl GalaChainClient {
                     }
                 })?;
 
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
+            let status_code = response.status();
+            let response_body = response.text().await.unwrap_or_default();
+            
+            info!("📡 FetchBalances Response Status: {}", status_code);
+            info!("📥 Response Body: {}", response_body);
+            
+            if !status_code.is_success() {
+                error!("❌ Balance request failed with status {}: {}", status_code, response_body);
                 return Err(GalaChainError::Api(format!(
                     "Balance request failed with status {}: {}", 
-                    status, 
-                    body
+                    status_code, 
+                    response_body
                 )));
             }
 
-            let balance_response: BalanceResponse = response
-                .json()
-                .await
+            let balance_response: BalanceResponse = serde_json::from_str(&response_body)
                 .map_err(|e| GalaChainError::Parse(format!("Failed to parse balance response: {}", e)))?;
 
             if let Some(balance) = balance_response.data.first() {
@@ -631,8 +655,11 @@ impl GalaChainClient {
                     .map(|hold| hold.quantity.parse::<f64>().unwrap_or(0.0))
                     .sum();
 
-                Ok((total - locked, locked))
+                let available = total - locked;
+                info!("💰 Balance parsed successfully - Available: {}, Locked: {}, Total: {}", available, locked, total);
+                Ok((available, locked))
             } else {
+                info!("💰 No balance data found - returning 0.0");
                 Ok((0.0, 0.0))
             }
         }, 3).await
@@ -2721,12 +2748,14 @@ struct SeedWordInput(usize);
 #[derive(Resource)]
 struct ImportState {
     seed_words: Vec<String>,
+    focused_input: Option<usize>,  // Track which input field is currently focused
 }
 
 impl Default for ImportState {
     fn default() -> Self {
         Self {
             seed_words: vec![String::new(); 12],
+            focused_input: None,
         }
     }
 }
@@ -2750,6 +2779,7 @@ fn wallet_import_system(
     if wallet_state.is_changed() && *wallet_state.get() == WalletState::Import {
         // Reset import state
         import_state.seed_words = vec![String::new(); 12];
+        import_state.focused_input = None;
         
         for entity in query.iter() {
             commands.entity(entity).despawn_descendants();
@@ -2870,61 +2900,89 @@ fn wallet_import_system(
         }
     }
 
-    // Handle word input interactions
-    for (interaction, word_input, children) in &mut word_input_query {
+    // Handle clicking on word input fields to focus them
+    for (interaction, word_input, _children) in &mut word_input_query {
         if let Interaction::Pressed = interaction {
             let word_index = word_input.0;
-            let mut current_word = import_state.seed_words[word_index].clone();
+            import_state.focused_input = Some(word_index);
+            info!("📝 Focused on word input {}", word_index + 1);
+        }
+    }
 
-            // Handle backspace
-            if keyboard_input.just_pressed(KeyCode::Backspace) || keyboard_input.just_pressed(KeyCode::Delete) {
-                current_word.pop();
+    // Handle keyboard input for the currently focused field
+    if let Some(focused_index) = import_state.focused_input {
+        let mut current_word = import_state.seed_words[focused_index].clone();
+        let mut word_changed = false;
+
+        // Handle backspace
+        if keyboard_input.just_pressed(KeyCode::Backspace) || keyboard_input.just_pressed(KeyCode::Delete) {
+            current_word.pop();
+            word_changed = true;
+        }
+
+        // Handle tab or enter to move to next field
+        if keyboard_input.just_pressed(KeyCode::Tab) || keyboard_input.just_pressed(KeyCode::Enter) {
+            if focused_index < 11 {
+                import_state.focused_input = Some(focused_index + 1);
+            } else {
+                import_state.focused_input = None; // Unfocus after last field
             }
-            // Handle space
-            else if keyboard_input.just_pressed(KeyCode::Space) {
-                // Don't allow spaces in individual words
+        }
+
+        // Handle escape to unfocus
+        if keyboard_input.just_pressed(KeyCode::Escape) {
+            import_state.focused_input = None;
+        }
+
+        // Handle letters
+        for key_code in keyboard_input.get_just_pressed() {
+            match key_code {
+                KeyCode::KeyA => { current_word.push('a'); word_changed = true; },
+                KeyCode::KeyB => { current_word.push('b'); word_changed = true; },
+                KeyCode::KeyC => { current_word.push('c'); word_changed = true; },
+                KeyCode::KeyD => { current_word.push('d'); word_changed = true; },
+                KeyCode::KeyE => { current_word.push('e'); word_changed = true; },
+                KeyCode::KeyF => { current_word.push('f'); word_changed = true; },
+                KeyCode::KeyG => { current_word.push('g'); word_changed = true; },
+                KeyCode::KeyH => { current_word.push('h'); word_changed = true; },
+                KeyCode::KeyI => { current_word.push('i'); word_changed = true; },
+                KeyCode::KeyJ => { current_word.push('j'); word_changed = true; },
+                KeyCode::KeyK => { current_word.push('k'); word_changed = true; },
+                KeyCode::KeyL => { current_word.push('l'); word_changed = true; },
+                KeyCode::KeyM => { current_word.push('m'); word_changed = true; },
+                KeyCode::KeyN => { current_word.push('n'); word_changed = true; },
+                KeyCode::KeyO => { current_word.push('o'); word_changed = true; },
+                KeyCode::KeyP => { current_word.push('p'); word_changed = true; },
+                KeyCode::KeyQ => { current_word.push('q'); word_changed = true; },
+                KeyCode::KeyR => { current_word.push('r'); word_changed = true; },
+                KeyCode::KeyS => { current_word.push('s'); word_changed = true; },
+                KeyCode::KeyT => { current_word.push('t'); word_changed = true; },
+                KeyCode::KeyU => { current_word.push('u'); word_changed = true; },
+                KeyCode::KeyV => { current_word.push('v'); word_changed = true; },
+                KeyCode::KeyW => { current_word.push('w'); word_changed = true; },
+                KeyCode::KeyX => { current_word.push('x'); word_changed = true; },
+                KeyCode::KeyY => { current_word.push('y'); word_changed = true; },
+                KeyCode::KeyZ => { current_word.push('z'); word_changed = true; },
+                _ => {}
             }
-            // Handle letters
-            else {
-                for key_code in keyboard_input.get_just_pressed() {
-                    match key_code {
-                        KeyCode::KeyA => current_word.push('a'),
-                        KeyCode::KeyB => current_word.push('b'),
-                        KeyCode::KeyC => current_word.push('c'),
-                        KeyCode::KeyD => current_word.push('d'),
-                        KeyCode::KeyE => current_word.push('e'),
-                        KeyCode::KeyF => current_word.push('f'),
-                        KeyCode::KeyG => current_word.push('g'),
-                        KeyCode::KeyH => current_word.push('h'),
-                        KeyCode::KeyI => current_word.push('i'),
-                        KeyCode::KeyJ => current_word.push('j'),
-                        KeyCode::KeyK => current_word.push('k'),
-                        KeyCode::KeyL => current_word.push('l'),
-                        KeyCode::KeyM => current_word.push('m'),
-                        KeyCode::KeyN => current_word.push('n'),
-                        KeyCode::KeyO => current_word.push('o'),
-                        KeyCode::KeyP => current_word.push('p'),
-                        KeyCode::KeyQ => current_word.push('q'),
-                        KeyCode::KeyR => current_word.push('r'),
-                        KeyCode::KeyS => current_word.push('s'),
-                        KeyCode::KeyT => current_word.push('t'),
-                        KeyCode::KeyU => current_word.push('u'),
-                        KeyCode::KeyV => current_word.push('v'),
-                        KeyCode::KeyW => current_word.push('w'),
-                        KeyCode::KeyX => current_word.push('x'),
-                        KeyCode::KeyY => current_word.push('y'),
-                        KeyCode::KeyZ => current_word.push('z'),
-                        _ => {}
+        }
+
+        if word_changed {
+            import_state.seed_words[focused_index] = current_word.clone();
+            
+            // Update the text display for the focused field
+            for (_, word_input, children) in &word_input_query {
+                if word_input.0 == focused_index {
+                    if let Some(child) = children.first() {
+                        if let Ok(mut text) = text_query.get_mut(*child) {
+                            *text = Text::new(if current_word.is_empty() { 
+                                format!("Word {}", focused_index + 1) 
+                            } else { 
+                                current_word.clone() 
+                            });
+                        }
                     }
-                }
-            }
-
-            import_state.seed_words[word_index] = current_word.clone();
-
-            // Update text display
-            if let Some(child) = children.first() {
-                if let Ok(mut text) = text_query.get_mut(*child) {
-                    *text = Text::new(current_word);
+                    break;
                 }
             }
         }
