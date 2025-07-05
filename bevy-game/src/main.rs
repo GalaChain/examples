@@ -1284,6 +1284,7 @@ impl Plugin for MenuPlugin {
             .insert_resource(ExportState::default())
             .insert_resource(TransferState::default())
             .insert_resource(BurnState::default())
+            .insert_resource(FocusedInput::default())
             .add_systems(Startup, setup_main_menu)
             .add_systems(
                 Update,
@@ -2731,6 +2732,23 @@ impl Default for ImportState {
     }
 }
 
+#[derive(Resource, Default)]
+struct FocusedInput {
+    entity: Option<Entity>,
+    input_type: FocusedInputType,
+}
+
+#[derive(Default, Clone, Copy, PartialEq)]
+enum FocusedInputType {
+    #[default]
+    None,
+    SeedWord(usize),
+    SettingsUrl,
+    TransferRecipient,
+    TransferAmount,
+    BurnAmount,
+}
+
 fn wallet_import_system(
     wallet_state: Res<State<WalletState>>,
     mut commands: Commands,
@@ -2738,18 +2756,21 @@ fn wallet_import_system(
     mut wallet_data: ResMut<WalletData>,
     keychain: Res<KeychainManager>,
     mut import_state: ResMut<ImportState>,
+    mut focused_input: ResMut<FocusedInput>,
     mut button_query: Query<
         (&Interaction, &mut BackgroundColor, &mut BorderColor),
-        (Changed<Interaction>, With<ImportWalletButton>),
+        (Changed<Interaction>, With<ImportWalletButton>, Without<SeedWordInput>),
     >,
     keyboard_input: Res<ButtonInput<KeyCode>>,
-    mut word_input_query: Query<(&Interaction, &SeedWordInput, &Children), Changed<Interaction>>,
+    mut word_input_query: Query<(Entity, &Interaction, &SeedWordInput, &Children, &mut BackgroundColor, &mut BorderColor), Without<ImportWalletButton>>,
     mut text_query: Query<&mut Text>,
 ) {
     // Show import wallet UI when state changes
     if wallet_state.is_changed() && *wallet_state.get() == WalletState::Import {
         // Reset import state
         import_state.seed_words = vec![String::new(); 12];
+        focused_input.entity = None;
+        focused_input.input_type = FocusedInputType::None;
         
         for entity in query.iter() {
             commands.entity(entity).despawn_descendants();
@@ -2870,61 +2891,105 @@ fn wallet_import_system(
         }
     }
 
-    // Handle word input interactions
-    for (interaction, word_input, children) in &mut word_input_query {
-        if let Interaction::Pressed = interaction {
-            let word_index = word_input.0;
+    // Handle clicking on word input fields to focus them
+    for (entity, interaction, word_input, _children, mut bg_color, mut border_color) in &mut word_input_query {
+        // First, apply focused state styling if this is the focused field
+        if focused_input.entity == Some(entity) {
+            *border_color = BorderColor(Color::srgb(0.5, 0.5, 1.0));
+            *bg_color = BackgroundColor(Color::srgb(0.25, 0.25, 0.25));
+        } else {
+            // Apply non-focused styling based on interaction state
+            match *interaction {
+                Interaction::Hovered => {
+                    *border_color = BorderColor(Color::srgb(0.8, 0.8, 0.8));
+                    *bg_color = BackgroundColor(Color::srgb(0.2, 0.2, 0.2));
+                }
+                Interaction::None => {
+                    *border_color = BorderColor(Color::WHITE);
+                    *bg_color = BackgroundColor(Color::srgb(0.2, 0.2, 0.2));
+                }
+                _ => {}
+            }
+        }
+        
+        // Handle click to focus
+        if *interaction == Interaction::Pressed {
+            // Set this input as focused
+            focused_input.entity = Some(entity);
+            focused_input.input_type = FocusedInputType::SeedWord(word_input.0);
+        }
+    }
+    
+    // Handle keyboard input for the focused field
+    if let Some(focused_entity) = focused_input.entity {
+        if let FocusedInputType::SeedWord(word_index) = focused_input.input_type {
             let mut current_word = import_state.seed_words[word_index].clone();
+            let mut word_changed = false;
 
             // Handle backspace
             if keyboard_input.just_pressed(KeyCode::Backspace) || keyboard_input.just_pressed(KeyCode::Delete) {
-                current_word.pop();
+                if !current_word.is_empty() {
+                    current_word.pop();
+                    word_changed = true;
+                }
             }
-            // Handle space
-            else if keyboard_input.just_pressed(KeyCode::Space) {
-                // Don't allow spaces in individual words
-            }
-            // Handle letters
-            else {
-                for key_code in keyboard_input.get_just_pressed() {
-                    match key_code {
-                        KeyCode::KeyA => current_word.push('a'),
-                        KeyCode::KeyB => current_word.push('b'),
-                        KeyCode::KeyC => current_word.push('c'),
-                        KeyCode::KeyD => current_word.push('d'),
-                        KeyCode::KeyE => current_word.push('e'),
-                        KeyCode::KeyF => current_word.push('f'),
-                        KeyCode::KeyG => current_word.push('g'),
-                        KeyCode::KeyH => current_word.push('h'),
-                        KeyCode::KeyI => current_word.push('i'),
-                        KeyCode::KeyJ => current_word.push('j'),
-                        KeyCode::KeyK => current_word.push('k'),
-                        KeyCode::KeyL => current_word.push('l'),
-                        KeyCode::KeyM => current_word.push('m'),
-                        KeyCode::KeyN => current_word.push('n'),
-                        KeyCode::KeyO => current_word.push('o'),
-                        KeyCode::KeyP => current_word.push('p'),
-                        KeyCode::KeyQ => current_word.push('q'),
-                        KeyCode::KeyR => current_word.push('r'),
-                        KeyCode::KeyS => current_word.push('s'),
-                        KeyCode::KeyT => current_word.push('t'),
-                        KeyCode::KeyU => current_word.push('u'),
-                        KeyCode::KeyV => current_word.push('v'),
-                        KeyCode::KeyW => current_word.push('w'),
-                        KeyCode::KeyX => current_word.push('x'),
-                        KeyCode::KeyY => current_word.push('y'),
-                        KeyCode::KeyZ => current_word.push('z'),
-                        _ => {}
+            
+            // Handle Tab to move to next field
+            if keyboard_input.just_pressed(KeyCode::Tab) {
+                let next_index = (word_index + 1) % 12;
+                // Find the entity with the next index
+                for (entity, _, word_input, _, _, _) in &word_input_query {
+                    if word_input.0 == next_index {
+                        focused_input.entity = Some(entity);
+                        focused_input.input_type = FocusedInputType::SeedWord(next_index);
+                        break;
                     }
                 }
             }
+            
+            // Handle letters
+            for key_code in keyboard_input.get_just_pressed() {
+                match key_code {
+                    KeyCode::KeyA => { current_word.push('a'); word_changed = true; }
+                    KeyCode::KeyB => { current_word.push('b'); word_changed = true; }
+                    KeyCode::KeyC => { current_word.push('c'); word_changed = true; }
+                    KeyCode::KeyD => { current_word.push('d'); word_changed = true; }
+                    KeyCode::KeyE => { current_word.push('e'); word_changed = true; }
+                    KeyCode::KeyF => { current_word.push('f'); word_changed = true; }
+                    KeyCode::KeyG => { current_word.push('g'); word_changed = true; }
+                    KeyCode::KeyH => { current_word.push('h'); word_changed = true; }
+                    KeyCode::KeyI => { current_word.push('i'); word_changed = true; }
+                    KeyCode::KeyJ => { current_word.push('j'); word_changed = true; }
+                    KeyCode::KeyK => { current_word.push('k'); word_changed = true; }
+                    KeyCode::KeyL => { current_word.push('l'); word_changed = true; }
+                    KeyCode::KeyM => { current_word.push('m'); word_changed = true; }
+                    KeyCode::KeyN => { current_word.push('n'); word_changed = true; }
+                    KeyCode::KeyO => { current_word.push('o'); word_changed = true; }
+                    KeyCode::KeyP => { current_word.push('p'); word_changed = true; }
+                    KeyCode::KeyQ => { current_word.push('q'); word_changed = true; }
+                    KeyCode::KeyR => { current_word.push('r'); word_changed = true; }
+                    KeyCode::KeyS => { current_word.push('s'); word_changed = true; }
+                    KeyCode::KeyT => { current_word.push('t'); word_changed = true; }
+                    KeyCode::KeyU => { current_word.push('u'); word_changed = true; }
+                    KeyCode::KeyV => { current_word.push('v'); word_changed = true; }
+                    KeyCode::KeyW => { current_word.push('w'); word_changed = true; }
+                    KeyCode::KeyX => { current_word.push('x'); word_changed = true; }
+                    KeyCode::KeyY => { current_word.push('y'); word_changed = true; }
+                    KeyCode::KeyZ => { current_word.push('z'); word_changed = true; }
+                    _ => {}
+                }
+            }
 
-            import_state.seed_words[word_index] = current_word.clone();
+            if word_changed {
+                import_state.seed_words[word_index] = current_word.clone();
 
-            // Update text display
-            if let Some(child) = children.first() {
-                if let Ok(mut text) = text_query.get_mut(*child) {
-                    *text = Text::new(current_word);
+                // Update text display for the focused field
+                if let Ok((_, _, _, children, _, _)) = word_input_query.get(focused_entity) {
+                    if let Some(child) = children.first() {
+                        if let Ok(mut text) = text_query.get_mut(*child) {
+                            *text = Text::new(current_word);
+                        }
+                    }
                 }
             }
         }
@@ -3321,18 +3386,19 @@ fn wallet_transfer_system(
     query: Query<Entity, With<ContentArea>>,
     wallet_data: Res<WalletData>,
     mut transfer_state: ResMut<TransferState>,
+    mut focused_input: ResMut<FocusedInput>,
     keyboard_input: Res<ButtonInput<KeyCode>>,
     mut address_input_query: Query<
-        (&Interaction, &Children),
-        (Changed<Interaction>, With<TransferAddressInput>),
+        (Entity, &Interaction, &Children, &mut BackgroundColor, &mut BorderColor),
+        (With<TransferAddressInput>, Without<TransferAmountInput>, Without<TransferButton>),
     >,
     mut amount_input_query: Query<
-        (&Interaction, &Children),
-        (Changed<Interaction>, With<TransferAmountInput>, Without<TransferAddressInput>),
+        (Entity, &Interaction, &Children, &mut BackgroundColor, &mut BorderColor),
+        (With<TransferAmountInput>, Without<TransferAddressInput>, Without<TransferButton>),
     >,
     mut transfer_button_query: Query<
         (&Interaction, &mut BackgroundColor, &mut BorderColor),
-        (Changed<Interaction>, With<TransferButton>),
+        (Changed<Interaction>, With<TransferButton>, Without<TransferAddressInput>, Without<TransferAmountInput>),
     >,
     mut text_query: Query<&mut Text>,
 ) {
@@ -3340,6 +3406,8 @@ fn wallet_transfer_system(
         transfer_state.recipient_address.clear();
         transfer_state.amount.clear();
         transfer_state.is_processing = false;
+        focused_input.entity = None;
+        focused_input.input_type = FocusedInputType::None;
 
         for entity in query.iter() {
             commands.entity(entity).despawn_descendants();
@@ -3474,82 +3542,166 @@ fn wallet_transfer_system(
         }
     }
 
-    // Handle address input
-    for (interaction, children) in &mut address_input_query {
-        if let Interaction::Pressed = interaction {
-            // Handle keyboard input for address
-            for key_code in keyboard_input.get_just_pressed() {
-                match key_code {
-                    KeyCode::Backspace | KeyCode::Delete => {
-                        transfer_state.recipient_address.pop();
-                    }
-                    KeyCode::KeyA | KeyCode::KeyB | KeyCode::KeyC | KeyCode::KeyD | KeyCode::KeyE |
-                    KeyCode::KeyF | KeyCode::KeyG | KeyCode::KeyH | KeyCode::KeyI | KeyCode::KeyJ |
-                    KeyCode::KeyK | KeyCode::KeyL | KeyCode::KeyM | KeyCode::KeyN | KeyCode::KeyO |
-                    KeyCode::KeyP | KeyCode::KeyQ | KeyCode::KeyR | KeyCode::KeyS | KeyCode::KeyT |
-                    KeyCode::KeyU | KeyCode::KeyV | KeyCode::KeyW | KeyCode::KeyX | KeyCode::KeyY |
-                    KeyCode::KeyZ => {
-                        if let Some(char) = key_to_char(*key_code) {
-                            transfer_state.recipient_address.push(char);
-                        }
-                    }
-                    KeyCode::Digit0 | KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3 | KeyCode::Digit4 |
-                    KeyCode::Digit5 | KeyCode::Digit6 | KeyCode::Digit7 | KeyCode::Digit8 | KeyCode::Digit9 => {
-                        if let Some(char) = key_to_char(*key_code) {
-                            transfer_state.recipient_address.push(char);
-                        }
-                    }
-                    _ => {}
+    // Handle clicking on address input field to focus it
+    for (entity, interaction, _children, mut bg_color, mut border_color) in &mut address_input_query {
+        // First, apply focused state styling if this is the focused field
+        if focused_input.entity == Some(entity) {
+            *border_color = BorderColor(Color::srgb(0.5, 0.5, 1.0));
+            *bg_color = BackgroundColor(Color::srgb(0.25, 0.25, 0.25));
+        } else {
+            // Apply non-focused styling based on interaction state
+            match *interaction {
+                Interaction::Hovered => {
+                    *border_color = BorderColor(Color::srgb(0.8, 0.8, 0.8));
+                    *bg_color = BackgroundColor(Color::srgb(0.2, 0.2, 0.2));
                 }
-            }
-
-            // Update text display
-            if let Some(child) = children.first() {
-                if let Ok(mut text) = text_query.get_mut(*child) {
-                    *text = Text::new(if transfer_state.recipient_address.is_empty() {
-                        "Click to enter recipient address..."
-                    } else {
-                        &transfer_state.recipient_address
-                    });
+                Interaction::None => {
+                    *border_color = BorderColor(Color::WHITE);
+                    *bg_color = BackgroundColor(Color::srgb(0.2, 0.2, 0.2));
                 }
+                _ => {}
             }
+        }
+        
+        // Handle click to focus
+        if *interaction == Interaction::Pressed {
+            focused_input.entity = Some(entity);
+            focused_input.input_type = FocusedInputType::TransferRecipient;
         }
     }
 
-    // Handle amount input
-    for (interaction, children) in &mut amount_input_query {
-        if let Interaction::Pressed = interaction {
-            // Handle keyboard input for amount
-            for key_code in keyboard_input.get_just_pressed() {
-                match key_code {
-                    KeyCode::Backspace | KeyCode::Delete => {
-                        transfer_state.amount.pop();
-                    }
-                    KeyCode::Digit0 | KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3 | KeyCode::Digit4 |
-                    KeyCode::Digit5 | KeyCode::Digit6 | KeyCode::Digit7 | KeyCode::Digit8 | KeyCode::Digit9 => {
-                        if let Some(char) = key_to_char(*key_code) {
-                            transfer_state.amount.push(char);
-                        }
-                    }
-                    KeyCode::Period => {
-                        if !transfer_state.amount.contains('.') {
-                            transfer_state.amount.push('.');
-                        }
-                    }
-                    _ => {}
+    // Handle clicking on amount input field to focus it
+    for (entity, interaction, _children, mut bg_color, mut border_color) in &mut amount_input_query {
+        // First, apply focused state styling if this is the focused field
+        if focused_input.entity == Some(entity) {
+            *border_color = BorderColor(Color::srgb(0.5, 0.5, 1.0));
+            *bg_color = BackgroundColor(Color::srgb(0.25, 0.25, 0.25));
+        } else {
+            // Apply non-focused styling based on interaction state
+            match *interaction {
+                Interaction::Hovered => {
+                    *border_color = BorderColor(Color::srgb(0.8, 0.8, 0.8));
+                    *bg_color = BackgroundColor(Color::srgb(0.2, 0.2, 0.2));
                 }
+                Interaction::None => {
+                    *border_color = BorderColor(Color::WHITE);
+                    *bg_color = BackgroundColor(Color::srgb(0.2, 0.2, 0.2));
+                }
+                _ => {}
             }
+        }
+        
+        // Handle click to focus
+        if *interaction == Interaction::Pressed {
+            focused_input.entity = Some(entity);
+            focused_input.input_type = FocusedInputType::TransferAmount;
+        }
+    }
+    
+    // Handle keyboard input for the focused field
+    if let Some(focused_entity) = focused_input.entity {
+        match focused_input.input_type {
+            FocusedInputType::TransferRecipient => {
+                let mut address_changed = false;
 
-            // Update text display
-            if let Some(child) = children.first() {
-                if let Ok(mut text) = text_query.get_mut(*child) {
-                    *text = Text::new(if transfer_state.amount.is_empty() {
-                        "0.0"
-                    } else {
-                        &transfer_state.amount
-                    });
+                // Handle backspace
+                if keyboard_input.just_pressed(KeyCode::Backspace) || keyboard_input.just_pressed(KeyCode::Delete) {
+                    if !transfer_state.recipient_address.is_empty() {
+                        transfer_state.recipient_address.pop();
+                        address_changed = true;
+                    }
+                }
+                
+                // Handle Tab to move to amount field
+                if keyboard_input.just_pressed(KeyCode::Tab) {
+                    // Find the amount input entity
+                    for (entity, _, _, _, _) in &amount_input_query {
+                        focused_input.entity = Some(entity);
+                        focused_input.input_type = FocusedInputType::TransferAmount;
+                        break;
+                    }
+                }
+                
+                // Handle letters and numbers
+                for key_code in keyboard_input.get_just_pressed() {
+                    if let Some(char) = key_to_char(*key_code) {
+                        transfer_state.recipient_address.push(char);
+                        address_changed = true;
+                    }
+                }
+
+                if address_changed {
+                    // Update text display for the focused field
+                    if let Ok((_, _, children, _, _)) = address_input_query.get(focused_entity) {
+                        if let Some(child) = children.first() {
+                            if let Ok(mut text) = text_query.get_mut(*child) {
+                                *text = Text::new(if transfer_state.recipient_address.is_empty() {
+                                    "Click to enter recipient address..."
+                                } else {
+                                    &transfer_state.recipient_address
+                                });
+                            }
+                        }
+                    }
                 }
             }
+            FocusedInputType::TransferAmount => {
+                let mut amount_changed = false;
+
+                // Handle backspace
+                if keyboard_input.just_pressed(KeyCode::Backspace) || keyboard_input.just_pressed(KeyCode::Delete) {
+                    if !transfer_state.amount.is_empty() {
+                        transfer_state.amount.pop();
+                        amount_changed = true;
+                    }
+                }
+                
+                // Handle Tab to move back to address field
+                if keyboard_input.just_pressed(KeyCode::Tab) {
+                    // Find the address input entity
+                    for (entity, _, _, _, _) in &address_input_query {
+                        focused_input.entity = Some(entity);
+                        focused_input.input_type = FocusedInputType::TransferRecipient;
+                        break;
+                    }
+                }
+                
+                // Handle numbers and period
+                for key_code in keyboard_input.get_just_pressed() {
+                    match key_code {
+                        KeyCode::Digit0 | KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3 | KeyCode::Digit4 |
+                        KeyCode::Digit5 | KeyCode::Digit6 | KeyCode::Digit7 | KeyCode::Digit8 | KeyCode::Digit9 => {
+                            if let Some(char) = key_to_char(*key_code) {
+                                transfer_state.amount.push(char);
+                                amount_changed = true;
+                            }
+                        }
+                        KeyCode::Period => {
+                            if !transfer_state.amount.contains('.') {
+                                transfer_state.amount.push('.');
+                                amount_changed = true;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                if amount_changed {
+                    // Update text display for the focused field
+                    if let Ok((_, _, children, _, _)) = amount_input_query.get(focused_entity) {
+                        if let Some(child) = children.first() {
+                            if let Ok(mut text) = text_query.get_mut(*child) {
+                                *text = Text::new(if transfer_state.amount.is_empty() {
+                                    "0.0"
+                                } else {
+                                    &transfer_state.amount
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -3687,20 +3839,23 @@ fn wallet_burn_system(
     query: Query<Entity, With<ContentArea>>,
     wallet_data: Res<WalletData>,
     mut burn_state: ResMut<BurnState>,
+    mut focused_input: ResMut<FocusedInput>,
     keyboard_input: Res<ButtonInput<KeyCode>>,
     mut amount_input_query: Query<
-        (&Interaction, &Children),
-        (Changed<Interaction>, With<BurnAmountInput>),
+        (Entity, &Interaction, &Children, &mut BackgroundColor, &mut BorderColor),
+        (With<BurnAmountInput>, Without<BurnButton>),
     >,
     mut burn_button_query: Query<
         (&Interaction, &mut BackgroundColor, &mut BorderColor),
-        (Changed<Interaction>, With<BurnButton>),
+        (Changed<Interaction>, With<BurnButton>, Without<BurnAmountInput>),
     >,
     mut text_query: Query<&mut Text>,
 ) {
     if wallet_state.is_changed() && *wallet_state.get() == WalletState::Burn {
         burn_state.amount.clear();
         burn_state.is_processing = false;
+        focused_input.entity = None;
+        focused_input.input_type = FocusedInputType::None;
 
         for entity in query.iter() {
             commands.entity(entity).despawn_descendants();
@@ -3811,38 +3966,79 @@ fn wallet_burn_system(
         }
     }
 
-    // Handle amount input
-    for (interaction, children) in &mut amount_input_query {
-        if let Interaction::Pressed = interaction {
-            // Handle keyboard input for amount
+    // Handle clicking on amount input field to focus it
+    for (entity, interaction, _children, mut bg_color, mut border_color) in &mut amount_input_query {
+        // First, apply focused state styling if this is the focused field
+        if focused_input.entity == Some(entity) {
+            *border_color = BorderColor(Color::srgb(0.5, 0.5, 1.0));
+            *bg_color = BackgroundColor(Color::srgb(0.25, 0.25, 0.25));
+        } else {
+            // Apply non-focused styling based on interaction state
+            match *interaction {
+                Interaction::Hovered => {
+                    *border_color = BorderColor(Color::srgb(0.8, 0.8, 0.8));
+                    *bg_color = BackgroundColor(Color::srgb(0.2, 0.2, 0.2));
+                }
+                Interaction::None => {
+                    *border_color = BorderColor(Color::WHITE);
+                    *bg_color = BackgroundColor(Color::srgb(0.2, 0.2, 0.2));
+                }
+                _ => {}
+            }
+        }
+        
+        // Handle click to focus
+        if *interaction == Interaction::Pressed {
+            focused_input.entity = Some(entity);
+            focused_input.input_type = FocusedInputType::BurnAmount;
+        }
+    }
+    
+    // Handle keyboard input for the focused field
+    if let Some(focused_entity) = focused_input.entity {
+        if let FocusedInputType::BurnAmount = focused_input.input_type {
+            let mut amount_changed = false;
+
+            // Handle backspace
+            if keyboard_input.just_pressed(KeyCode::Backspace) || keyboard_input.just_pressed(KeyCode::Delete) {
+                if !burn_state.amount.is_empty() {
+                    burn_state.amount.pop();
+                    amount_changed = true;
+                }
+            }
+            
+            // Handle numbers and period
             for key_code in keyboard_input.get_just_pressed() {
                 match key_code {
-                    KeyCode::Backspace | KeyCode::Delete => {
-                        burn_state.amount.pop();
-                    }
                     KeyCode::Digit0 | KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3 | KeyCode::Digit4 |
                     KeyCode::Digit5 | KeyCode::Digit6 | KeyCode::Digit7 | KeyCode::Digit8 | KeyCode::Digit9 => {
                         if let Some(char) = key_to_char(*key_code) {
                             burn_state.amount.push(char);
+                            amount_changed = true;
                         }
                     }
                     KeyCode::Period => {
                         if !burn_state.amount.contains('.') {
                             burn_state.amount.push('.');
+                            amount_changed = true;
                         }
                     }
                     _ => {}
                 }
             }
 
-            // Update text display
-            if let Some(child) = children.first() {
-                if let Ok(mut text) = text_query.get_mut(*child) {
-                    *text = Text::new(if burn_state.amount.is_empty() {
-                        "0.0"
-                    } else {
-                        &burn_state.amount
-                    });
+            if amount_changed {
+                // Update text display for the focused field
+                if let Ok((_, _, children, _, _)) = amount_input_query.get(focused_entity) {
+                    if let Some(child) = children.first() {
+                        if let Ok(mut text) = text_query.get_mut(*child) {
+                            *text = Text::new(if burn_state.amount.is_empty() {
+                                "0.0"
+                            } else {
+                                &burn_state.amount
+                            });
+                        }
+                    }
                 }
             }
         }
