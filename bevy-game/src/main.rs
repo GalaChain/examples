@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 use reqwest::Client;
 use std::time::Duration;
 
+#[cfg(test)]
+mod tests;
+
 // Menu System
 #[derive(States, Debug, Clone, PartialEq, Eq, Hash, Default)]
 enum AppState {
@@ -2738,7 +2741,7 @@ struct FocusedInput {
     input_type: FocusedInputType,
 }
 
-#[derive(Default, Clone, Copy, PartialEq)]
+#[derive(Default, Clone, Copy, PartialEq, Debug)]
 enum FocusedInputType {
     #[default]
     None,
