@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 use reqwest::Client;
 use std::time::Duration;
 
+#[cfg(test)]
+mod tests;
+
 // Menu System
 #[derive(States, Debug, Clone, PartialEq, Eq, Hash, Default)]
 enum AppState {
@@ -95,7 +98,7 @@ impl SecureWalletData {
                         mnemonic = value.trim_matches('"').replace("\\\"", "\"").to_string();
                     }
                     "created_at" => {
-                        created_at = value.parse().map_err(|_| 
+                        created_at = value.parse().map_err(|_|
                             KeychainError::Deserialize("Invalid timestamp".to_string())
                         )?;
                     }
@@ -132,13 +135,13 @@ impl KeychainManager {
 
     pub fn store_wallet(&self, wallet_data: &SecureWalletData) -> Result<(), KeychainError> {
         let json_data = wallet_data.to_json()?;
-        
+
         let entry = Entry::new(&self.service_name, &self.username)
             .map_err(|e| KeychainError::Access(format!("Failed to create keychain entry: {}", e)))?;
-        
+
         entry.set_password(&json_data)
             .map_err(|e| KeychainError::Access(format!("Failed to store wallet in keychain: {}", e)))?;
-        
+
         info!("Wallet stored securely in OS keychain service: {}", self.service_name);
         Ok(())
     }
@@ -146,20 +149,20 @@ impl KeychainManager {
     pub fn load_wallet(&self) -> Result<SecureWalletData, KeychainError> {
         let entry = Entry::new(&self.service_name, &self.username)
             .map_err(|e| KeychainError::Access(format!("Failed to create keychain entry: {}", e)))?;
-        
+
         let json_data = entry.get_password()
             .map_err(|e| match e {
                 keyring::Error::NoEntry => KeychainError::NotFound,
                 _ => KeychainError::Access(format!("Failed to load wallet from keychain: {}", e)),
             })?;
-        
+
         SecureWalletData::from_json(&json_data)
     }
 
     pub fn delete_wallet(&self) -> Result<(), KeychainError> {
         let entry = Entry::new(&self.service_name, &self.username)
             .map_err(|e| KeychainError::Access(format!("Failed to create keychain entry: {}", e)))?;
-        
+
         entry.delete_credential()
             .map_err(|e| match e {
                 keyring::Error::NoEntry => KeychainError::NotFound,
@@ -330,13 +333,13 @@ pub struct ApiSettings {
     // Base URLs for the servers
     pub operations_base_url: String,
     pub identity_base_url: String,
-    
+
     // Configurable API endpoints
     /// Registration endpoint path (e.g., "/api/identities/register")
     pub registration_endpoint: String,
     /// Balance endpoint template with placeholders (e.g., "/api/product/{channel}/{contract}/FetchBalances")
     pub balance_endpoint: String,
-    
+
     // Blockchain configuration
     /// Smart contract name for token operations (e.g., "GalaChainToken")
     pub contract_name: String,
@@ -356,7 +359,7 @@ impl Default for ApiSettings {
             operations_base_url: "http://localhost:3000".to_string(),
             identity_base_url: "http://localhost:4000".to_string(),
             // Default endpoints based on API documentation
-            registration_endpoint: "/api/{channel}/{contract}/RegisterEthUser".to_string(),
+            registration_endpoint: "/api/identities/register".to_string(),  // Special endpoint on identity server
             registration_check_endpoint: "/api/{channel}/{contract}/GetPublicKey".to_string(),
             balance_endpoint: "/api/{channel}/{contract}/FetchBalances".to_string(),
             contract_name: "GalaChainToken".to_string(),  // For balance operations
@@ -381,17 +384,14 @@ impl GalaChainClient {
             settings: settings.clone(),
         }
     }
-    
-    // Helper method to build the registration URL
+
+    // Helper method to build the registration URL (uses identity server)
     pub fn get_registration_url(&self) -> String {
-        let endpoint = self.settings.registration_endpoint
-            .replace("{channel}", &self.settings.channel_name)
-            .replace("{contract}", &self.settings.identity_contract_name);
-        let url = format!("{}{}", self.operations_api, endpoint);
+        let url = format!("{}{}", self.identity_api, self.settings.registration_endpoint);
         info!("🔗 Built registration URL: {}", url);
         url
     }
-    
+
     // Helper method to build the registration check URL (GetPublicKey)
     pub fn get_registration_check_url(&self) -> String {
         let endpoint = self.settings.registration_check_endpoint
@@ -399,7 +399,7 @@ impl GalaChainClient {
             .replace("{contract}", &self.settings.identity_contract_name);
         format!("{}{}", self.operations_api, endpoint)  // Use operations API for GetPublicKey
     }
-    
+
     // Helper method to build the balance URL
     pub fn get_balance_url(&self) -> String {
         let endpoint = self.settings.balance_endpoint
@@ -415,7 +415,7 @@ impl GalaChainClient {
         Fut: std::future::Future<Output = Result<T, GalaChainError>>,
     {
         let mut last_error = None;
-        
+
         for attempt in 0..=max_retries {
             match operation().await {
                 Ok(result) => return Ok(result),
@@ -430,7 +430,7 @@ impl GalaChainClient {
                 }
             }
         }
-        
+
         Err(last_error.unwrap())
     }
 
@@ -462,7 +462,7 @@ impl GalaChainClient {
 
         let url = self.get_registration_check_url();
         let request_body = serde_json::to_string_pretty(&request).unwrap_or_default();
-        
+
         info!("🔍 Checking registration with GetPublicKey for: {}", gala_address);
         info!("📍 Request URL: {}", url);
         info!("📤 Request Body: {}", request_body);
@@ -486,24 +486,24 @@ impl GalaChainClient {
 
             let status_code = response.status();
             let response_body = response.text().await.unwrap_or_default();
-            
+
             info!("📡 GetPublicKey Response Status: {}", status_code);
             info!("📥 Response Body: {}", response_body);
-            
+
             if status_code.is_success() {
                 // Parse the GetPublicKey response
                 let get_pk_response: GetPublicKeyResponse = serde_json::from_str(&response_body)
                     .map_err(|e| GalaChainError::Parse(format!("Failed to parse GetPublicKey response: {}", e)))?;
-                
-                info!("📋 Parsed GetPublicKey response - Status: {}, Has Data: {}", 
+
+                info!("📋 Parsed GetPublicKey response - Status: {}, Has Data: {}",
                       get_pk_response.status, get_pk_response.data.is_some());
-                
+
                 // Status 1 means success, and if we have data, user is registered
                 if get_pk_response.status == 1 && get_pk_response.data.is_some() {
                     info!("✅ User is registered!");
                     Ok(true)
                 } else {
-                    info!("❌ User is not registered (Status: {}, Data present: {})", 
+                    info!("❌ User is not registered (Status: {}, Data present: {})",
                           get_pk_response.status, get_pk_response.data.is_some());
                     Ok(false)
                 }
@@ -512,15 +512,15 @@ impl GalaChainClient {
                 Ok(false)
             } else {
                 info!("⚠️ GetPublicKey failed - Status: {}, Body: {}", status_code, response_body);
-                
+
                 // Check if the error indicates user doesn't exist
                 if response_body.contains("not found") || response_body.contains("does not exist") || status_code == 400 {
                     info!("👤 User not found - treating as not registered");
                     Ok(false)
                 } else {
                     Err(GalaChainError::Api(format!(
-                        "Registration check failed with status {}: {}", 
-                        status_code, 
+                        "Registration check failed with status {}: {}",
+                        status_code,
                         response_body
                     )))
                 }
@@ -567,18 +567,18 @@ impl GalaChainClient {
 
             let status_code = response.status();
             let response_body = response.text().await.unwrap_or_default();
-            
+
             info!("📡 RegisterEthUser Response Status: {}", status_code);
             info!("📥 Response Body: {}", response_body);
-            
+
             if status_code.is_success() {
                 info!("✅ User registration successful!");
                 Ok(())
             } else {
                 error!("❌ Registration failed with status {}: {}", status_code, response_body);
                 Err(GalaChainError::Api(format!(
-                    "Registration failed with status {}: {}", 
-                    status_code, 
+                    "Registration failed with status {}: {}",
+                    status_code,
                     response_body
                 )))
             }
@@ -606,7 +606,7 @@ impl GalaChainClient {
 
         let url = self.get_balance_url();
         let request_body_str = serde_json::to_string_pretty(&request).unwrap_or_default();
-        
+
         info!("💰 Fetching balance with FetchBalances for: {}", gala_address);
         info!("📍 Request URL: {}", url);
         info!("📤 Request Body: {}", request_body_str);
@@ -630,15 +630,15 @@ impl GalaChainClient {
 
             let status_code = response.status();
             let response_body = response.text().await.unwrap_or_default();
-            
+
             info!("📡 FetchBalances Response Status: {}", status_code);
             info!("📥 Response Body: {}", response_body);
-            
+
             if !status_code.is_success() {
                 error!("❌ Balance request failed with status {}: {}", status_code, response_body);
                 return Err(GalaChainError::Api(format!(
-                    "Balance request failed with status {}: {}", 
-                    status_code, 
+                    "Balance request failed with status {}: {}",
+                    status_code,
                     response_body
                 )));
             }
@@ -649,7 +649,7 @@ impl GalaChainClient {
             if let Some(balance) = balance_response.data.first() {
                 let total = balance.quantity.parse::<f64>()
                     .map_err(|e| GalaChainError::Parse(format!("Invalid balance quantity: {}", e)))?;
-                
+
                 let locked: f64 = balance.locked_holds
                     .iter()
                     .map(|hold| hold.quantity.parse::<f64>().unwrap_or(0.0))
@@ -672,12 +672,12 @@ impl GalaChainClient {
         } else {
             eth_address
         };
-        
+
         // Apply EIP-55 checksumming
         let checksummed = Self::to_checksum_address(addr);
         format!("eth|{}", checksummed)
     }
-    
+
     // EIP-55 Ethereum address checksumming
     fn to_checksum_address(address: &str) -> String {
         let address = address.to_lowercase();
@@ -686,7 +686,7 @@ impl GalaChainClient {
             hasher.update(address.as_bytes());
             hex::encode(hasher.finalize())
         };
-        
+
         let mut result = String::new();
         for (i, c) in address.chars().enumerate() {
             if c.is_ascii_hexdigit() && c.is_alphabetic() {
@@ -911,7 +911,7 @@ fn generate_wallet_secure(keychain: &KeychainManager) -> Result<(SecretKey, Stri
         .map_err(|e| format!("Failed to generate mnemonic: {}", e))?;
 
     let mnemonic_str = mnemonic.to_string();
-    
+
     // Generate wallet data from mnemonic
     let (private_key, address) = keychain.generate_wallet_from_mnemonic(&mnemonic_str)?;
 
@@ -1235,7 +1235,7 @@ fn import_confirm_system(
         match *interaction {
             Interaction::Pressed => {
                 let mnemonic_string = wallet_data.import_words.join(" ");
-                
+
                 match keychain.generate_wallet_from_mnemonic(&mnemonic_string) {
                     Ok((secret_key, address)) => {
                         // Store in keychain
@@ -1311,6 +1311,7 @@ impl Plugin for MenuPlugin {
             .insert_resource(ExportState::default())
             .insert_resource(TransferState::default())
             .insert_resource(BurnState::default())
+            .insert_resource(FocusedInput::default())
             .add_systems(Startup, setup_main_menu)
             .add_systems(
                 Update,
@@ -1356,7 +1357,7 @@ fn load_wallet_from_keychain(
                     wallet_data.private_key = Some(secret_key);
                     wallet_data.address = Some(address.clone());
                     wallet_data.mnemonic = Some(secure_data.mnemonic);
-                    
+
                     info!("Wallet loaded from keychain: {}", address);
                 }
                 Err(e) => {
@@ -1459,7 +1460,7 @@ fn show_wallet_menu(mut commands: Commands) {
                     create_wallet_menu_button(parent, "Check Balance", WalletMenuAction::Balance);
                     create_wallet_menu_button(parent, "Transfer", WalletMenuAction::Transfer);
                     create_wallet_menu_button(parent, "Burn Tokens", WalletMenuAction::Burn);
-                    
+
                     // Back button
                     parent
                         .spawn((
@@ -1525,7 +1526,7 @@ fn show_settings(mut commands: Commands, api_settings: Res<ApiSettings>) {
         ))
         .with_children(|parent| {
             parent.spawn((Text::new("API Settings"), MenuTitle));
-            
+
             parent.spawn((
                 Text::new("Configure GalaChain API endpoints for HTTP integration:"),
                 Node {
@@ -1542,7 +1543,7 @@ fn show_settings(mut commands: Commands, api_settings: Res<ApiSettings>) {
                     ..default()
                 },
             ));
-            
+
             parent
                 .spawn((
                     Node {
@@ -1565,7 +1566,7 @@ fn show_settings(mut commands: Commands, api_settings: Res<ApiSettings>) {
                     ..default()
                 },
             ));
-            
+
             parent
                 .spawn((
                     Node {
@@ -1588,7 +1589,7 @@ fn show_settings(mut commands: Commands, api_settings: Res<ApiSettings>) {
                     ..default()
                 },
             ));
-            
+
             // Back button
             parent
                 .spawn((
@@ -1628,7 +1629,7 @@ fn show_info(mut commands: Commands) {
         ))
         .with_children(|parent| {
             parent.spawn((Text::new("About GalaChain Desktop Wallet"), MenuTitle));
-            
+
             parent.spawn((
                 Text::new("This application demonstrates how to integrate GalaChain\nfunctionality into a desktop application using the Bevy game engine.\n\nKey features:\n• Secure local wallet storage using OS keychain\n• GalaChain user registration and authentication\n• Token balance queries and transactions\n• Cross-platform compatibility\n\nThis serves as a reference implementation for developers\nwho want to build desktop applications or games that\nintegrate with the GalaChain ecosystem."),
                 Node {
@@ -1637,7 +1638,7 @@ fn show_info(mut commands: Commands) {
                     ..default()
                 },
             ));
-            
+
             // Back button
             parent
                 .spawn((
@@ -1841,7 +1842,7 @@ fn wallet_overview_system(
                             },
                         ));
                     }
-                    
+
                     parent.spawn((
                         Text::new(format!("Security: {}", keychain_status)),
                         Node {
@@ -2066,10 +2067,10 @@ fn wallet_balance_system(
                             },
                             BorderColor(Color::BLACK),
                             BorderRadius::new(Val::Px(5.0), Val::Px(5.0), Val::Px(5.0), Val::Px(5.0)),
-                            BackgroundColor(if balance_state.loading { 
-                                Color::srgb(0.3, 0.3, 0.3) 
-                            } else { 
-                                Color::srgb(0.2, 0.7, 0.2) 
+                            BackgroundColor(if balance_state.loading {
+                                Color::srgb(0.3, 0.3, 0.3)
+                            } else {
+                                Color::srgb(0.2, 0.7, 0.2)
                             }),
                         ))
                         .with_child(Text::new(if balance_state.loading {
@@ -2107,14 +2108,14 @@ fn wallet_balance_system(
                     if let Some(address) = &wallet_data.address {
                         balance_state.loading = true;
                         balance_state.error = None;
-                        
+
                         // Spawn async task to fetch balance
                         let client = galachain_client.clone();
                         let gala_address = GalaChainClient::ethereum_to_galachain_address(address);
-                        
+
                         info!("Balance refresh requested for address: {}", gala_address);
                         info!("Calling: {}/api/product/FetchBalances", client.operations_api);
-                        
+
                         // Spawn task using blocking method
                         info!("Creating balance task for address: {}", gala_address);
                         async_tasks.balance_task = Some(bevy::tasks::IoTaskPool::get().spawn(async move {
@@ -2152,12 +2153,12 @@ fn wallet_registration_system(
     if let Some(address) = &wallet_data.address {
         if last_address.as_ref() != Some(address) {
             *last_address = Some(address.clone());
-            
+
             // Check registration status
             let gala_address = GalaChainClient::ethereum_to_galachain_address(address);
             let client = (*galachain_client).clone();
             let address_clone = gala_address.clone();
-            
+
             *registration_check_task = Some(bevy::tasks::IoTaskPool::get().spawn(async move {
                 client.check_registration_blocking(&address_clone)
             }));
@@ -2168,17 +2169,17 @@ fn wallet_registration_system(
     if let Some(task) = registration_check_task.as_mut() {
         if let Some(result) = bevy::tasks::block_on(bevy::tasks::poll_once(task)) {
             *registration_check_task = None;
-            
+
             match result {
                 Ok(is_registered) => {
                     if !is_registered && wallet_data.private_key.is_some() {
                         // Auto-register the user
                         info!("User not registered, attempting auto-registration...");
-                        
+
                         let private_key = wallet_data.private_key.as_ref().unwrap();
                         let public_key = GalaChainClient::get_public_key_from_private(private_key);
                         let client = (*galachain_client).clone();
-                        
+
                         *registration_task = Some(bevy::tasks::IoTaskPool::get().spawn(async move {
                             client.register_user_blocking(&public_key)
                         }));
@@ -2197,7 +2198,7 @@ fn wallet_registration_system(
     if let Some(task) = registration_task.as_mut() {
         if let Some(result) = bevy::tasks::block_on(bevy::tasks::poll_once(task)) {
             *registration_task = None;
-            
+
             match result {
                 Ok(_) => {
                     info!("User successfully registered with GalaChain");
@@ -2230,14 +2231,14 @@ fn wallet_registration_ui_system(
     // Show registration UI when state changes or registration state updates
     let entering_registration = wallet_state.is_changed() && *wallet_state.get() == WalletState::Registration;
     let registration_state_changed = registration_state.is_changed() && *wallet_state.get() == WalletState::Registration;
-    
+
     if entering_registration {
         // Reset registration state when entering registration view
         registration_state.checking = false;
         registration_state.registering = false;
         registration_state.error = None;
     }
-    
+
     if entering_registration || registration_state_changed {
 
         for entity in query.iter() {
@@ -2350,10 +2351,10 @@ fn wallet_registration_ui_system(
                             },
                             BorderColor(Color::BLACK),
                             BorderRadius::new(Val::Px(5.0), Val::Px(5.0), Val::Px(5.0), Val::Px(5.0)),
-                            BackgroundColor(if registration_state.checking { 
-                                Color::srgb(0.3, 0.3, 0.3) 
-                            } else { 
-                                Color::srgb(0.2, 0.2, 0.7) 
+                            BackgroundColor(if registration_state.checking {
+                                Color::srgb(0.3, 0.3, 0.3)
+                            } else {
+                                Color::srgb(0.2, 0.2, 0.7)
                             }),
                         ))
                         .with_child(Text::new(if registration_state.checking {
@@ -2380,10 +2381,10 @@ fn wallet_registration_ui_system(
                                     },
                                     BorderColor(Color::BLACK),
                                     BorderRadius::new(Val::Px(5.0), Val::Px(5.0), Val::Px(5.0), Val::Px(5.0)),
-                                    BackgroundColor(if registration_state.registering { 
-                                        Color::srgb(0.3, 0.3, 0.3) 
-                                    } else { 
-                                        Color::srgb(0.2, 0.7, 0.2) 
+                                    BackgroundColor(if registration_state.registering {
+                                        Color::srgb(0.3, 0.3, 0.3)
+                                    } else {
+                                        Color::srgb(0.2, 0.7, 0.2)
                                     }),
                                 ))
                                 .with_child(Text::new(if registration_state.registering {
@@ -2424,12 +2425,12 @@ fn wallet_registration_ui_system(
                         registration_state.checking = true;
                         registration_state.error = None;
                         registration_state.is_registered = None;
-                        
+
                         let client = galachain_client.clone();
                         let gala_address = GalaChainClient::ethereum_to_galachain_address(address);
-                        
+
                         info!("Checking registration status for address: {}", gala_address);
-                        
+
                         // Spawn task to check registration using blocking method
                         async_tasks.registration_check_task = Some(bevy::tasks::IoTaskPool::get().spawn(async move {
                             client.check_registration_blocking(&gala_address)
@@ -2459,12 +2460,12 @@ fn wallet_registration_ui_system(
                     if let Some(private_key) = &wallet_data.private_key {
                         registration_state.registering = true;
                         registration_state.error = None;
-                        
+
                         let public_key = GalaChainClient::get_public_key_from_private(private_key);
                         let client = galachain_client.clone();
-                        
+
                         info!("Registering identity with public key: {}", public_key);
-                        
+
                         // Spawn task to register using blocking method
                         async_tasks.registration_task = Some(bevy::tasks::IoTaskPool::get().spawn(async move {
                             client.register_user_blocking(&public_key)
@@ -2496,7 +2497,7 @@ fn async_task_polling_system(
     let has_balance_task = async_tasks.balance_task.is_some();
     let has_reg_check_task = async_tasks.registration_check_task.is_some();
     let has_reg_task = async_tasks.registration_task.is_some();
-    
+
     if has_balance_task || has_reg_check_task || has_reg_task {
         info!("Polling tasks - Balance: {}, RegCheck: {}, Reg: {}", has_balance_task, has_reg_check_task, has_reg_task);
     }
@@ -2506,7 +2507,7 @@ fn async_task_polling_system(
         if let Some(result) = bevy::tasks::block_on(bevy::tasks::poll_once(task)) {
             async_tasks.balance_task = None;
             balance_state.loading = false;
-            
+
             match result {
                 Ok((available, locked)) => {
                     balance_state.available = available;
@@ -2528,9 +2529,9 @@ fn async_task_polling_system(
         if let Some(result) = bevy::tasks::block_on(bevy::tasks::poll_once(task)) {
             async_tasks.registration_check_task = None;
             registration_state.checking = false;
-            
+
             info!("Registration check task completed, processing result...");
-            
+
             match result {
                 Ok(is_registered) => {
                     registration_state.is_registered = Some(is_registered);
@@ -2551,7 +2552,7 @@ fn async_task_polling_system(
         if let Some(result) = bevy::tasks::block_on(bevy::tasks::poll_once(task)) {
             async_tasks.registration_task = None;
             registration_state.registering = false;
-            
+
             match result {
                 Ok(_) => {
                     registration_state.is_registered = Some(true);
@@ -2760,6 +2761,23 @@ impl Default for ImportState {
     }
 }
 
+#[derive(Resource, Default)]
+struct FocusedInput {
+    entity: Option<Entity>,
+    input_type: FocusedInputType,
+}
+
+#[derive(Default, Clone, Copy, PartialEq, Debug)]
+enum FocusedInputType {
+    #[default]
+    None,
+    SeedWord(usize),
+    SettingsUrl,
+    TransferRecipient,
+    TransferAmount,
+    BurnAmount,
+}
+
 fn wallet_import_system(
     wallet_state: Res<State<WalletState>>,
     mut commands: Commands,
@@ -2767,20 +2785,22 @@ fn wallet_import_system(
     mut wallet_data: ResMut<WalletData>,
     keychain: Res<KeychainManager>,
     mut import_state: ResMut<ImportState>,
+    mut focused_input: ResMut<FocusedInput>,
     mut button_query: Query<
         (&Interaction, &mut BackgroundColor, &mut BorderColor),
-        (Changed<Interaction>, With<ImportWalletButton>),
+        (Changed<Interaction>, With<ImportWalletButton>, Without<SeedWordInput>),
     >,
     keyboard_input: Res<ButtonInput<KeyCode>>,
-    mut word_input_query: Query<(&Interaction, &SeedWordInput, &Children), Changed<Interaction>>,
+    mut word_input_query: Query<(Entity, &Interaction, &SeedWordInput, &Children, &mut BackgroundColor, &mut BorderColor), Without<ImportWalletButton>>,
     mut text_query: Query<&mut Text>,
 ) {
     // Show import wallet UI when state changes
     if wallet_state.is_changed() && *wallet_state.get() == WalletState::Import {
         // Reset import state
         import_state.seed_words = vec![String::new(); 12];
-        import_state.focused_input = None;
-        
+        focused_input.entity = None;
+        focused_input.input_type = FocusedInputType::None;
+
         for entity in query.iter() {
             commands.entity(entity).despawn_descendants();
             commands.entity(entity).with_children(|parent| {
@@ -2848,7 +2868,7 @@ fn wallet_import_system(
                                             ..default()
                                         },
                                     ));
-                                    
+
                                     parent
                                         .spawn((
                                             Button,
@@ -2901,88 +2921,104 @@ fn wallet_import_system(
     }
 
     // Handle clicking on word input fields to focus them
-    for (interaction, word_input, _children) in &mut word_input_query {
-        if let Interaction::Pressed = interaction {
-            let word_index = word_input.0;
-            import_state.focused_input = Some(word_index);
-            info!("📝 Focused on word input {}", word_index + 1);
-        }
-    }
-
-    // Handle keyboard input for the currently focused field
-    if let Some(focused_index) = import_state.focused_input {
-        let mut current_word = import_state.seed_words[focused_index].clone();
-        let mut word_changed = false;
-
-        // Handle backspace
-        if keyboard_input.just_pressed(KeyCode::Backspace) || keyboard_input.just_pressed(KeyCode::Delete) {
-            current_word.pop();
-            word_changed = true;
-        }
-
-        // Handle tab or enter to move to next field
-        if keyboard_input.just_pressed(KeyCode::Tab) || keyboard_input.just_pressed(KeyCode::Enter) {
-            if focused_index < 11 {
-                import_state.focused_input = Some(focused_index + 1);
-            } else {
-                import_state.focused_input = None; // Unfocus after last field
-            }
-        }
-
-        // Handle escape to unfocus
-        if keyboard_input.just_pressed(KeyCode::Escape) {
-            import_state.focused_input = None;
-        }
-
-        // Handle letters
-        for key_code in keyboard_input.get_just_pressed() {
-            match key_code {
-                KeyCode::KeyA => { current_word.push('a'); word_changed = true; },
-                KeyCode::KeyB => { current_word.push('b'); word_changed = true; },
-                KeyCode::KeyC => { current_word.push('c'); word_changed = true; },
-                KeyCode::KeyD => { current_word.push('d'); word_changed = true; },
-                KeyCode::KeyE => { current_word.push('e'); word_changed = true; },
-                KeyCode::KeyF => { current_word.push('f'); word_changed = true; },
-                KeyCode::KeyG => { current_word.push('g'); word_changed = true; },
-                KeyCode::KeyH => { current_word.push('h'); word_changed = true; },
-                KeyCode::KeyI => { current_word.push('i'); word_changed = true; },
-                KeyCode::KeyJ => { current_word.push('j'); word_changed = true; },
-                KeyCode::KeyK => { current_word.push('k'); word_changed = true; },
-                KeyCode::KeyL => { current_word.push('l'); word_changed = true; },
-                KeyCode::KeyM => { current_word.push('m'); word_changed = true; },
-                KeyCode::KeyN => { current_word.push('n'); word_changed = true; },
-                KeyCode::KeyO => { current_word.push('o'); word_changed = true; },
-                KeyCode::KeyP => { current_word.push('p'); word_changed = true; },
-                KeyCode::KeyQ => { current_word.push('q'); word_changed = true; },
-                KeyCode::KeyR => { current_word.push('r'); word_changed = true; },
-                KeyCode::KeyS => { current_word.push('s'); word_changed = true; },
-                KeyCode::KeyT => { current_word.push('t'); word_changed = true; },
-                KeyCode::KeyU => { current_word.push('u'); word_changed = true; },
-                KeyCode::KeyV => { current_word.push('v'); word_changed = true; },
-                KeyCode::KeyW => { current_word.push('w'); word_changed = true; },
-                KeyCode::KeyX => { current_word.push('x'); word_changed = true; },
-                KeyCode::KeyY => { current_word.push('y'); word_changed = true; },
-                KeyCode::KeyZ => { current_word.push('z'); word_changed = true; },
+    for (entity, interaction, word_input, _children, mut bg_color, mut border_color) in &mut word_input_query {
+        // First, apply focused state styling if this is the focused field
+        if focused_input.entity == Some(entity) {
+            *border_color = BorderColor(Color::srgb(0.5, 0.5, 1.0));
+            *bg_color = BackgroundColor(Color::srgb(0.25, 0.25, 0.25));
+        } else {
+            // Apply non-focused styling based on interaction state
+            match *interaction {
+                Interaction::Hovered => {
+                    *border_color = BorderColor(Color::srgb(0.8, 0.8, 0.8));
+                    *bg_color = BackgroundColor(Color::srgb(0.2, 0.2, 0.2));
+                }
+                Interaction::None => {
+                    *border_color = BorderColor(Color::WHITE);
+                    *bg_color = BackgroundColor(Color::srgb(0.2, 0.2, 0.2));
+                }
                 _ => {}
             }
         }
 
-        if word_changed {
-            import_state.seed_words[focused_index] = current_word.clone();
-            
-            // Update the text display for the focused field
-            for (_, word_input, children) in &word_input_query {
-                if word_input.0 == focused_index {
+        // Handle click to focus
+        if *interaction == Interaction::Pressed {
+            // Set this input as focused
+            focused_input.entity = Some(entity);
+            focused_input.input_type = FocusedInputType::SeedWord(word_input.0);
+        }
+    }
+
+    // Handle keyboard input for the focused field
+    if let Some(focused_entity) = focused_input.entity {
+        if let FocusedInputType::SeedWord(word_index) = focused_input.input_type {
+            let mut current_word = import_state.seed_words[word_index].clone();
+            let mut word_changed = false;
+
+            // Handle backspace
+            if keyboard_input.just_pressed(KeyCode::Backspace) || keyboard_input.just_pressed(KeyCode::Delete) {
+                if !current_word.is_empty() {
+                    current_word.pop();
+                    word_changed = true;
+                }
+            }
+
+            // Handle Tab to move to next field
+            if keyboard_input.just_pressed(KeyCode::Tab) {
+                let next_index = (word_index + 1) % 12;
+                // Find the entity with the next index
+                for (entity, _, word_input, _, _, _) in &word_input_query {
+                    if word_input.0 == next_index {
+                        focused_input.entity = Some(entity);
+                        focused_input.input_type = FocusedInputType::SeedWord(next_index);
+                        break;
+                    }
+                }
+            }
+
+            // Handle letters
+            for key_code in keyboard_input.get_just_pressed() {
+                match key_code {
+                    KeyCode::KeyA => { current_word.push('a'); word_changed = true; }
+                    KeyCode::KeyB => { current_word.push('b'); word_changed = true; }
+                    KeyCode::KeyC => { current_word.push('c'); word_changed = true; }
+                    KeyCode::KeyD => { current_word.push('d'); word_changed = true; }
+                    KeyCode::KeyE => { current_word.push('e'); word_changed = true; }
+                    KeyCode::KeyF => { current_word.push('f'); word_changed = true; }
+                    KeyCode::KeyG => { current_word.push('g'); word_changed = true; }
+                    KeyCode::KeyH => { current_word.push('h'); word_changed = true; }
+                    KeyCode::KeyI => { current_word.push('i'); word_changed = true; }
+                    KeyCode::KeyJ => { current_word.push('j'); word_changed = true; }
+                    KeyCode::KeyK => { current_word.push('k'); word_changed = true; }
+                    KeyCode::KeyL => { current_word.push('l'); word_changed = true; }
+                    KeyCode::KeyM => { current_word.push('m'); word_changed = true; }
+                    KeyCode::KeyN => { current_word.push('n'); word_changed = true; }
+                    KeyCode::KeyO => { current_word.push('o'); word_changed = true; }
+                    KeyCode::KeyP => { current_word.push('p'); word_changed = true; }
+                    KeyCode::KeyQ => { current_word.push('q'); word_changed = true; }
+                    KeyCode::KeyR => { current_word.push('r'); word_changed = true; }
+                    KeyCode::KeyS => { current_word.push('s'); word_changed = true; }
+                    KeyCode::KeyT => { current_word.push('t'); word_changed = true; }
+                    KeyCode::KeyU => { current_word.push('u'); word_changed = true; }
+                    KeyCode::KeyV => { current_word.push('v'); word_changed = true; }
+                    KeyCode::KeyW => { current_word.push('w'); word_changed = true; }
+                    KeyCode::KeyX => { current_word.push('x'); word_changed = true; }
+                    KeyCode::KeyY => { current_word.push('y'); word_changed = true; }
+                    KeyCode::KeyZ => { current_word.push('z'); word_changed = true; }
+                    _ => {}
+                }
+            }
+
+            if word_changed {
+                import_state.seed_words[word_index] = current_word.clone();
+
+                // Update text display for the focused field
+                if let Ok((_, _, _, children, _, _)) = word_input_query.get(focused_entity) {
                     if let Some(child) = children.first() {
                         if let Ok(mut text) = text_query.get_mut(*child) {
-                            *text = Text::new(if current_word.is_empty() { 
-                                format!("Word {}", focused_index + 1) 
-                            } else { 
-                                current_word.clone() 
-                            });
+                            *text = Text::new(current_word);
                         }
                     }
-                    break;
                 }
             }
         }
@@ -2993,7 +3029,7 @@ fn wallet_import_system(
         match *interaction {
             Interaction::Pressed => {
                 let mnemonic_string = import_state.seed_words.join(" ");
-                
+
                 match keychain.generate_wallet_from_mnemonic(&mnemonic_string) {
                     Ok((secret_key, address)) => {
                         // Store in keychain
@@ -3138,7 +3174,7 @@ fn wallet_export_system(
 ) {
     if wallet_state.is_changed() && *wallet_state.get() == WalletState::Export {
         export_state.show_seed = false;
-        
+
         for entity in query.iter() {
             commands.entity(entity).despawn_descendants();
             commands.entity(entity).with_children(|parent| {
@@ -3243,7 +3279,7 @@ fn wallet_export_system(
         match *interaction {
             Interaction::Pressed => {
                 export_state.show_seed = !export_state.show_seed;
-                
+
                 // Refresh the UI
                 for entity in query.iter() {
                     commands.entity(entity).despawn_descendants();
@@ -3379,18 +3415,19 @@ fn wallet_transfer_system(
     query: Query<Entity, With<ContentArea>>,
     wallet_data: Res<WalletData>,
     mut transfer_state: ResMut<TransferState>,
+    mut focused_input: ResMut<FocusedInput>,
     keyboard_input: Res<ButtonInput<KeyCode>>,
     mut address_input_query: Query<
-        (&Interaction, &Children),
-        (Changed<Interaction>, With<TransferAddressInput>),
+        (Entity, &Interaction, &Children, &mut BackgroundColor, &mut BorderColor),
+        (With<TransferAddressInput>, Without<TransferAmountInput>, Without<TransferButton>),
     >,
     mut amount_input_query: Query<
-        (&Interaction, &Children),
-        (Changed<Interaction>, With<TransferAmountInput>, Without<TransferAddressInput>),
+        (Entity, &Interaction, &Children, &mut BackgroundColor, &mut BorderColor),
+        (With<TransferAmountInput>, Without<TransferAddressInput>, Without<TransferButton>),
     >,
     mut transfer_button_query: Query<
         (&Interaction, &mut BackgroundColor, &mut BorderColor),
-        (Changed<Interaction>, With<TransferButton>),
+        (Changed<Interaction>, With<TransferButton>, Without<TransferAddressInput>, Without<TransferAmountInput>),
     >,
     mut text_query: Query<&mut Text>,
 ) {
@@ -3398,6 +3435,8 @@ fn wallet_transfer_system(
         transfer_state.recipient_address.clear();
         transfer_state.amount.clear();
         transfer_state.is_processing = false;
+        focused_input.entity = None;
+        focused_input.input_type = FocusedInputType::None;
 
         for entity in query.iter() {
             commands.entity(entity).despawn_descendants();
@@ -3509,10 +3548,10 @@ fn wallet_transfer_system(
                         },
                         BorderColor(Color::BLACK),
                         BorderRadius::new(Val::Px(5.0), Val::Px(5.0), Val::Px(5.0), Val::Px(5.0)),
-                        BackgroundColor(if transfer_state.is_processing { 
-                            Color::srgb(0.5, 0.5, 0.5) 
-                        } else { 
-                            Color::srgb(0.2, 0.7, 0.2) 
+                        BackgroundColor(if transfer_state.is_processing {
+                            Color::srgb(0.5, 0.5, 0.5)
+                        } else {
+                            Color::srgb(0.2, 0.7, 0.2)
                         }),
                     ))
                     .with_child(Text::new(if transfer_state.is_processing {
@@ -3532,82 +3571,166 @@ fn wallet_transfer_system(
         }
     }
 
-    // Handle address input
-    for (interaction, children) in &mut address_input_query {
-        if let Interaction::Pressed = interaction {
-            // Handle keyboard input for address
-            for key_code in keyboard_input.get_just_pressed() {
-                match key_code {
-                    KeyCode::Backspace | KeyCode::Delete => {
-                        transfer_state.recipient_address.pop();
-                    }
-                    KeyCode::KeyA | KeyCode::KeyB | KeyCode::KeyC | KeyCode::KeyD | KeyCode::KeyE |
-                    KeyCode::KeyF | KeyCode::KeyG | KeyCode::KeyH | KeyCode::KeyI | KeyCode::KeyJ |
-                    KeyCode::KeyK | KeyCode::KeyL | KeyCode::KeyM | KeyCode::KeyN | KeyCode::KeyO |
-                    KeyCode::KeyP | KeyCode::KeyQ | KeyCode::KeyR | KeyCode::KeyS | KeyCode::KeyT |
-                    KeyCode::KeyU | KeyCode::KeyV | KeyCode::KeyW | KeyCode::KeyX | KeyCode::KeyY |
-                    KeyCode::KeyZ => {
-                        if let Some(char) = key_to_char(*key_code) {
-                            transfer_state.recipient_address.push(char);
-                        }
-                    }
-                    KeyCode::Digit0 | KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3 | KeyCode::Digit4 |
-                    KeyCode::Digit5 | KeyCode::Digit6 | KeyCode::Digit7 | KeyCode::Digit8 | KeyCode::Digit9 => {
-                        if let Some(char) = key_to_char(*key_code) {
-                            transfer_state.recipient_address.push(char);
-                        }
-                    }
-                    _ => {}
+    // Handle clicking on address input field to focus it
+    for (entity, interaction, _children, mut bg_color, mut border_color) in &mut address_input_query {
+        // First, apply focused state styling if this is the focused field
+        if focused_input.entity == Some(entity) {
+            *border_color = BorderColor(Color::srgb(0.5, 0.5, 1.0));
+            *bg_color = BackgroundColor(Color::srgb(0.25, 0.25, 0.25));
+        } else {
+            // Apply non-focused styling based on interaction state
+            match *interaction {
+                Interaction::Hovered => {
+                    *border_color = BorderColor(Color::srgb(0.8, 0.8, 0.8));
+                    *bg_color = BackgroundColor(Color::srgb(0.2, 0.2, 0.2));
                 }
+                Interaction::None => {
+                    *border_color = BorderColor(Color::WHITE);
+                    *bg_color = BackgroundColor(Color::srgb(0.2, 0.2, 0.2));
+                }
+                _ => {}
             }
+        }
 
-            // Update text display
-            if let Some(child) = children.first() {
-                if let Ok(mut text) = text_query.get_mut(*child) {
-                    *text = Text::new(if transfer_state.recipient_address.is_empty() {
-                        "Click to enter recipient address..."
-                    } else {
-                        &transfer_state.recipient_address
-                    });
-                }
-            }
+        // Handle click to focus
+        if *interaction == Interaction::Pressed {
+            focused_input.entity = Some(entity);
+            focused_input.input_type = FocusedInputType::TransferRecipient;
         }
     }
 
-    // Handle amount input
-    for (interaction, children) in &mut amount_input_query {
-        if let Interaction::Pressed = interaction {
-            // Handle keyboard input for amount
-            for key_code in keyboard_input.get_just_pressed() {
-                match key_code {
-                    KeyCode::Backspace | KeyCode::Delete => {
-                        transfer_state.amount.pop();
-                    }
-                    KeyCode::Digit0 | KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3 | KeyCode::Digit4 |
-                    KeyCode::Digit5 | KeyCode::Digit6 | KeyCode::Digit7 | KeyCode::Digit8 | KeyCode::Digit9 => {
-                        if let Some(char) = key_to_char(*key_code) {
-                            transfer_state.amount.push(char);
-                        }
-                    }
-                    KeyCode::Period => {
-                        if !transfer_state.amount.contains('.') {
-                            transfer_state.amount.push('.');
-                        }
-                    }
-                    _ => {}
+    // Handle clicking on amount input field to focus it
+    for (entity, interaction, _children, mut bg_color, mut border_color) in &mut amount_input_query {
+        // First, apply focused state styling if this is the focused field
+        if focused_input.entity == Some(entity) {
+            *border_color = BorderColor(Color::srgb(0.5, 0.5, 1.0));
+            *bg_color = BackgroundColor(Color::srgb(0.25, 0.25, 0.25));
+        } else {
+            // Apply non-focused styling based on interaction state
+            match *interaction {
+                Interaction::Hovered => {
+                    *border_color = BorderColor(Color::srgb(0.8, 0.8, 0.8));
+                    *bg_color = BackgroundColor(Color::srgb(0.2, 0.2, 0.2));
                 }
+                Interaction::None => {
+                    *border_color = BorderColor(Color::WHITE);
+                    *bg_color = BackgroundColor(Color::srgb(0.2, 0.2, 0.2));
+                }
+                _ => {}
             }
+        }
 
-            // Update text display
-            if let Some(child) = children.first() {
-                if let Ok(mut text) = text_query.get_mut(*child) {
-                    *text = Text::new(if transfer_state.amount.is_empty() {
-                        "0.0"
-                    } else {
-                        &transfer_state.amount
-                    });
+        // Handle click to focus
+        if *interaction == Interaction::Pressed {
+            focused_input.entity = Some(entity);
+            focused_input.input_type = FocusedInputType::TransferAmount;
+        }
+    }
+
+    // Handle keyboard input for the focused field
+    if let Some(focused_entity) = focused_input.entity {
+        match focused_input.input_type {
+            FocusedInputType::TransferRecipient => {
+                let mut address_changed = false;
+
+                // Handle backspace
+                if keyboard_input.just_pressed(KeyCode::Backspace) || keyboard_input.just_pressed(KeyCode::Delete) {
+                    if !transfer_state.recipient_address.is_empty() {
+                        transfer_state.recipient_address.pop();
+                        address_changed = true;
+                    }
+                }
+
+                // Handle Tab to move to amount field
+                if keyboard_input.just_pressed(KeyCode::Tab) {
+                    // Find the amount input entity
+                    for (entity, _, _, _, _) in &amount_input_query {
+                        focused_input.entity = Some(entity);
+                        focused_input.input_type = FocusedInputType::TransferAmount;
+                        break;
+                    }
+                }
+
+                // Handle letters and numbers
+                for key_code in keyboard_input.get_just_pressed() {
+                    if let Some(char) = key_to_char(*key_code) {
+                        transfer_state.recipient_address.push(char);
+                        address_changed = true;
+                    }
+                }
+
+                if address_changed {
+                    // Update text display for the focused field
+                    if let Ok((_, _, children, _, _)) = address_input_query.get(focused_entity) {
+                        if let Some(child) = children.first() {
+                            if let Ok(mut text) = text_query.get_mut(*child) {
+                                *text = Text::new(if transfer_state.recipient_address.is_empty() {
+                                    "Click to enter recipient address..."
+                                } else {
+                                    &transfer_state.recipient_address
+                                });
+                            }
+                        }
+                    }
                 }
             }
+            FocusedInputType::TransferAmount => {
+                let mut amount_changed = false;
+
+                // Handle backspace
+                if keyboard_input.just_pressed(KeyCode::Backspace) || keyboard_input.just_pressed(KeyCode::Delete) {
+                    if !transfer_state.amount.is_empty() {
+                        transfer_state.amount.pop();
+                        amount_changed = true;
+                    }
+                }
+
+                // Handle Tab to move back to address field
+                if keyboard_input.just_pressed(KeyCode::Tab) {
+                    // Find the address input entity
+                    for (entity, _, _, _, _) in &address_input_query {
+                        focused_input.entity = Some(entity);
+                        focused_input.input_type = FocusedInputType::TransferRecipient;
+                        break;
+                    }
+                }
+
+                // Handle numbers and period
+                for key_code in keyboard_input.get_just_pressed() {
+                    match key_code {
+                        KeyCode::Digit0 | KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3 | KeyCode::Digit4 |
+                        KeyCode::Digit5 | KeyCode::Digit6 | KeyCode::Digit7 | KeyCode::Digit8 | KeyCode::Digit9 => {
+                            if let Some(char) = key_to_char(*key_code) {
+                                transfer_state.amount.push(char);
+                                amount_changed = true;
+                            }
+                        }
+                        KeyCode::Period => {
+                            if !transfer_state.amount.contains('.') {
+                                transfer_state.amount.push('.');
+                                amount_changed = true;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                if amount_changed {
+                    // Update text display for the focused field
+                    if let Ok((_, _, children, _, _)) = amount_input_query.get(focused_entity) {
+                        if let Some(child) = children.first() {
+                            if let Ok(mut text) = text_query.get_mut(*child) {
+                                *text = Text::new(if transfer_state.amount.is_empty() {
+                                    "0.0"
+                                } else {
+                                    &transfer_state.amount
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -3615,15 +3738,15 @@ fn wallet_transfer_system(
     for (interaction, mut color, mut border_color) in &mut transfer_button_query {
         match *interaction {
             Interaction::Pressed => {
-                if !transfer_state.is_processing && 
-                   !transfer_state.recipient_address.is_empty() && 
+                if !transfer_state.is_processing &&
+                   !transfer_state.recipient_address.is_empty() &&
                    !transfer_state.amount.is_empty() {
-                    
+
                     transfer_state.is_processing = true;
-                    
+
                     // Simulate transfer process
                     info!("Transfer requested: {} GALA to {}", transfer_state.amount, transfer_state.recipient_address);
-                    
+
                     // Update UI to show result
                     for entity in query.iter() {
                         commands.entity(entity).despawn_descendants();
@@ -3646,7 +3769,7 @@ fn wallet_transfer_system(
                             ));
 
                             parent.spawn((
-                                Text::new(format!("Requested Transfer:\n• Amount: {} GALA\n• To: {}\n• From: {}", 
+                                Text::new(format!("Requested Transfer:\n• Amount: {} GALA\n• To: {}\n• From: {}",
                                     transfer_state.amount,
                                     transfer_state.recipient_address,
                                     wallet_data.address.as_ref().unwrap_or(&"Unknown".to_string())
@@ -3745,20 +3868,23 @@ fn wallet_burn_system(
     query: Query<Entity, With<ContentArea>>,
     wallet_data: Res<WalletData>,
     mut burn_state: ResMut<BurnState>,
+    mut focused_input: ResMut<FocusedInput>,
     keyboard_input: Res<ButtonInput<KeyCode>>,
     mut amount_input_query: Query<
-        (&Interaction, &Children),
-        (Changed<Interaction>, With<BurnAmountInput>),
+        (Entity, &Interaction, &Children, &mut BackgroundColor, &mut BorderColor),
+        (With<BurnAmountInput>, Without<BurnButton>),
     >,
     mut burn_button_query: Query<
         (&Interaction, &mut BackgroundColor, &mut BorderColor),
-        (Changed<Interaction>, With<BurnButton>),
+        (Changed<Interaction>, With<BurnButton>, Without<BurnAmountInput>),
     >,
     mut text_query: Query<&mut Text>,
 ) {
     if wallet_state.is_changed() && *wallet_state.get() == WalletState::Burn {
         burn_state.amount.clear();
         burn_state.is_processing = false;
+        focused_input.entity = None;
+        focused_input.input_type = FocusedInputType::None;
 
         for entity in query.iter() {
             commands.entity(entity).despawn_descendants();
@@ -3846,10 +3972,10 @@ fn wallet_burn_system(
                         },
                         BorderColor(Color::BLACK),
                         BorderRadius::new(Val::Px(5.0), Val::Px(5.0), Val::Px(5.0), Val::Px(5.0)),
-                        BackgroundColor(if burn_state.is_processing { 
-                            Color::srgb(0.5, 0.5, 0.5) 
-                        } else { 
-                            Color::srgb(0.8, 0.2, 0.2) 
+                        BackgroundColor(if burn_state.is_processing {
+                            Color::srgb(0.5, 0.5, 0.5)
+                        } else {
+                            Color::srgb(0.8, 0.2, 0.2)
                         }),
                     ))
                     .with_child(Text::new(if burn_state.is_processing {
@@ -3869,38 +3995,79 @@ fn wallet_burn_system(
         }
     }
 
-    // Handle amount input
-    for (interaction, children) in &mut amount_input_query {
-        if let Interaction::Pressed = interaction {
-            // Handle keyboard input for amount
+    // Handle clicking on amount input field to focus it
+    for (entity, interaction, _children, mut bg_color, mut border_color) in &mut amount_input_query {
+        // First, apply focused state styling if this is the focused field
+        if focused_input.entity == Some(entity) {
+            *border_color = BorderColor(Color::srgb(0.5, 0.5, 1.0));
+            *bg_color = BackgroundColor(Color::srgb(0.25, 0.25, 0.25));
+        } else {
+            // Apply non-focused styling based on interaction state
+            match *interaction {
+                Interaction::Hovered => {
+                    *border_color = BorderColor(Color::srgb(0.8, 0.8, 0.8));
+                    *bg_color = BackgroundColor(Color::srgb(0.2, 0.2, 0.2));
+                }
+                Interaction::None => {
+                    *border_color = BorderColor(Color::WHITE);
+                    *bg_color = BackgroundColor(Color::srgb(0.2, 0.2, 0.2));
+                }
+                _ => {}
+            }
+        }
+
+        // Handle click to focus
+        if *interaction == Interaction::Pressed {
+            focused_input.entity = Some(entity);
+            focused_input.input_type = FocusedInputType::BurnAmount;
+        }
+    }
+
+    // Handle keyboard input for the focused field
+    if let Some(focused_entity) = focused_input.entity {
+        if let FocusedInputType::BurnAmount = focused_input.input_type {
+            let mut amount_changed = false;
+
+            // Handle backspace
+            if keyboard_input.just_pressed(KeyCode::Backspace) || keyboard_input.just_pressed(KeyCode::Delete) {
+                if !burn_state.amount.is_empty() {
+                    burn_state.amount.pop();
+                    amount_changed = true;
+                }
+            }
+
+            // Handle numbers and period
             for key_code in keyboard_input.get_just_pressed() {
                 match key_code {
-                    KeyCode::Backspace | KeyCode::Delete => {
-                        burn_state.amount.pop();
-                    }
                     KeyCode::Digit0 | KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3 | KeyCode::Digit4 |
                     KeyCode::Digit5 | KeyCode::Digit6 | KeyCode::Digit7 | KeyCode::Digit8 | KeyCode::Digit9 => {
                         if let Some(char) = key_to_char(*key_code) {
                             burn_state.amount.push(char);
+                            amount_changed = true;
                         }
                     }
                     KeyCode::Period => {
                         if !burn_state.amount.contains('.') {
                             burn_state.amount.push('.');
+                            amount_changed = true;
                         }
                     }
                     _ => {}
                 }
             }
 
-            // Update text display
-            if let Some(child) = children.first() {
-                if let Ok(mut text) = text_query.get_mut(*child) {
-                    *text = Text::new(if burn_state.amount.is_empty() {
-                        "0.0"
-                    } else {
-                        &burn_state.amount
-                    });
+            if amount_changed {
+                // Update text display for the focused field
+                if let Ok((_, _, children, _, _)) = amount_input_query.get(focused_entity) {
+                    if let Some(child) = children.first() {
+                        if let Ok(mut text) = text_query.get_mut(*child) {
+                            *text = Text::new(if burn_state.amount.is_empty() {
+                                "0.0"
+                            } else {
+                                &burn_state.amount
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -3911,12 +4078,12 @@ fn wallet_burn_system(
         match *interaction {
             Interaction::Pressed => {
                 if !burn_state.is_processing && !burn_state.amount.is_empty() {
-                    
+
                     burn_state.is_processing = true;
-                    
+
                     // Simulate burn process
                     info!("Burn requested: {} GALA from {}", burn_state.amount, wallet_data.address.as_ref().unwrap_or(&"Unknown".to_string()));
-                    
+
                     // Update UI to show result
                     for entity in query.iter() {
                         commands.entity(entity).despawn_descendants();
@@ -3939,7 +4106,7 @@ fn wallet_burn_system(
                             ));
 
                             parent.spawn((
-                                Text::new(format!("Requested Burn:\n• Amount: {} GALA\n• From: {}\n• Unique Key: january-2025-event-{}", 
+                                Text::new(format!("Requested Burn:\n• Amount: {} GALA\n• From: {}\n• Unique Key: january-2025-event-{}",
                                     burn_state.amount,
                                     wallet_data.address.as_ref().unwrap_or(&"Unknown".to_string()),
                                     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()
