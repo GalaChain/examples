@@ -1312,12 +1312,14 @@ impl Plugin for MenuPlugin {
             .insert_resource(TransferState::default())
             .insert_resource(BurnState::default())
             .insert_resource(FocusedInput::default())
+            .insert_resource(SettingsState::default())
             .add_systems(Startup, setup_main_menu)
             .add_systems(
                 Update,
                 (
                     main_menu_system.run_if(in_state(AppState::MainMenu)),
                     wallet_menu_system.run_if(in_state(AppState::WalletMenu)),
+                    settings_system.run_if(in_state(AppState::Settings)),
                     back_button_system, // Run back button system in all states
                     async_task_polling_system, // Run async polling in all states
                     wallet_generate_system.run_if(in_state(WalletState::Generate)),
@@ -1509,7 +1511,12 @@ fn show_wallet_menu(mut commands: Commands) {
         });
 }
 
-fn show_settings(mut commands: Commands, api_settings: Res<ApiSettings>) {
+fn show_settings(mut commands: Commands, api_settings: Res<ApiSettings>, mut settings_state: ResMut<SettingsState>) {
+    // Initialize settings state with current API settings
+    settings_state.operations_url_draft = api_settings.operations_base_url.clone();
+    settings_state.identity_url_draft = api_settings.identity_base_url.clone();
+    settings_state.has_changes = false;
+
     commands
         .spawn((
             Node {
@@ -1528,7 +1535,7 @@ fn show_settings(mut commands: Commands, api_settings: Res<ApiSettings>) {
             parent.spawn((Text::new("API Settings"), MenuTitle));
 
             parent.spawn((
-                Text::new("Configure GalaChain API endpoints for HTTP integration:"),
+                Text::new("Configure GalaChain API endpoints - click to edit:"),
                 Node {
                     margin: UiRect::all(Val::Px(20.0)),
                     ..default()
@@ -1546,17 +1553,22 @@ fn show_settings(mut commands: Commands, api_settings: Res<ApiSettings>) {
 
             parent
                 .spawn((
+                    Button,
+                    OperationsUrlInput,
                     Node {
                         padding: UiRect::all(Val::Px(10.0)),
                         margin: UiRect::all(Val::Px(10.0)),
                         border: UiRect::all(Val::Px(2.0)),
                         max_width: Val::Px(400.0),
+                        min_height: Val::Px(40.0),
+                        justify_content: JustifyContent::FlexStart,
+                        align_items: AlignItems::Center,
                         ..default()
                     },
-                    BorderColor(Color::srgb(0.7, 0.7, 0.7)),
-                    BackgroundColor(Color::srgb(0.05, 0.05, 0.05)),
+                    BorderColor(Color::srgb(0.4, 0.4, 0.8)),
+                    BackgroundColor(Color::srgb(0.1, 0.1, 0.15)),
                 ))
-                .with_child(Text::new(&api_settings.operations_base_url));
+                .with_child(Text::new(&settings_state.operations_url_draft));
 
             // Identity API Setting
             parent.spawn((
@@ -1569,26 +1581,42 @@ fn show_settings(mut commands: Commands, api_settings: Res<ApiSettings>) {
 
             parent
                 .spawn((
+                    Button,
+                    IdentityUrlInput,
                     Node {
                         padding: UiRect::all(Val::Px(10.0)),
                         margin: UiRect::all(Val::Px(10.0)),
                         border: UiRect::all(Val::Px(2.0)),
                         max_width: Val::Px(400.0),
+                        min_height: Val::Px(40.0),
+                        justify_content: JustifyContent::FlexStart,
+                        align_items: AlignItems::Center,
                         ..default()
                     },
-                    BorderColor(Color::srgb(0.7, 0.7, 0.7)),
-                    BackgroundColor(Color::srgb(0.05, 0.05, 0.05)),
+                    BorderColor(Color::srgb(0.4, 0.4, 0.8)),
+                    BackgroundColor(Color::srgb(0.1, 0.1, 0.15)),
                 ))
-                .with_child(Text::new(&api_settings.identity_base_url));
+                .with_child(Text::new(&settings_state.identity_url_draft));
 
-            parent.spawn((
-                Text::new("💡 Note: These endpoints are currently using default localhost values.\nIn a production app, these would be configurable via UI inputs."),
-                Node {
-                    margin: UiRect::all(Val::Px(20.0)),
-                    max_width: Val::Px(500.0),
-                    ..default()
-                },
-            ));
+            // Save button
+            parent
+                .spawn((
+                    Button,
+                    SaveSettingsButton,
+                    Node {
+                        width: Val::Px(200.0),
+                        height: Val::Px(50.0),
+                        border: UiRect::all(Val::Px(2.0)),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        margin: UiRect::all(Val::Px(20.0)),
+                        ..default()
+                    },
+                    BorderColor(Color::BLACK),
+                    BorderRadius::new(Val::Px(5.0), Val::Px(5.0), Val::Px(5.0), Val::Px(5.0)),
+                    BackgroundColor(Color::srgb(0.15, 0.6, 0.15)),
+                ))
+                .with_child(Text::new("Save Settings"));
 
             // Back button
             parent
@@ -2746,6 +2774,15 @@ struct ImportWalletButton;
 #[derive(Component)]
 struct SeedWordInput(usize);
 
+#[derive(Component)]
+struct OperationsUrlInput;
+
+#[derive(Component)]
+struct IdentityUrlInput;
+
+#[derive(Component)]
+struct SaveSettingsButton;
+
 #[derive(Resource)]
 struct ImportState {
     seed_words: Vec<String>,
@@ -2767,12 +2804,30 @@ struct FocusedInput {
     input_type: FocusedInputType,
 }
 
+#[derive(Resource)]
+struct SettingsState {
+    operations_url_draft: String,
+    identity_url_draft: String,
+    has_changes: bool,
+}
+
+impl Default for SettingsState {
+    fn default() -> Self {
+        Self {
+            operations_url_draft: "http://localhost:3000".to_string(),
+            identity_url_draft: "http://localhost:4000".to_string(),
+            has_changes: false,
+        }
+    }
+}
+
 #[derive(Default, Clone, Copy, PartialEq, Debug)]
 enum FocusedInputType {
     #[default]
     None,
     SeedWord(usize),
-    SettingsUrl,
+    SettingsOperationsUrl,
+    SettingsIdentityUrl,
     TransferRecipient,
     TransferAmount,
     BurnAmount,
@@ -4144,6 +4199,173 @@ fn wallet_burn_system(
         }
     }
 }
+
+fn settings_system(
+    mut settings_state: ResMut<SettingsState>,
+    mut focused_input: ResMut<FocusedInput>,
+    mut api_settings: ResMut<ApiSettings>,
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    mut interaction_query: Query<(Entity, &Interaction, &mut BackgroundColor, &mut BorderColor), Changed<Interaction>>,
+    operations_query: Query<Entity, With<OperationsUrlInput>>,
+    identity_query: Query<Entity, With<IdentityUrlInput>>,
+    save_query: Query<Entity, With<SaveSettingsButton>>,
+    mut text_query: Query<&mut Text>,
+    children_query: Query<&Children>,
+) {
+    // Handle button interactions
+    for (entity, interaction, mut bg_color, mut border_color) in &mut interaction_query {
+        // Check if this is an operations URL input
+        if operations_query.contains(entity) {
+            match *interaction {
+                Interaction::Pressed => {
+                    focused_input.entity = Some(entity);
+                    focused_input.input_type = FocusedInputType::SettingsOperationsUrl;
+                    *bg_color = Color::srgb(0.15, 0.15, 0.2).into();
+                    border_color.0 = Color::srgb(0.6, 0.6, 1.0);
+                }
+                Interaction::Hovered => {
+                    if focused_input.input_type != FocusedInputType::SettingsOperationsUrl {
+                        *bg_color = Color::srgb(0.12, 0.12, 0.17).into();
+                        border_color.0 = Color::srgb(0.5, 0.5, 0.9);
+                    }
+                }
+                Interaction::None => {
+                    if focused_input.input_type != FocusedInputType::SettingsOperationsUrl {
+                        *bg_color = Color::srgb(0.1, 0.1, 0.15).into();
+                        border_color.0 = Color::srgb(0.4, 0.4, 0.8);
+                    }
+                }
+            }
+        }
+        // Check if this is an identity URL input
+        else if identity_query.contains(entity) {
+            match *interaction {
+                Interaction::Pressed => {
+                    focused_input.entity = Some(entity);
+                    focused_input.input_type = FocusedInputType::SettingsIdentityUrl;
+                    *bg_color = Color::srgb(0.15, 0.15, 0.2).into();
+                    border_color.0 = Color::srgb(0.6, 0.6, 1.0);
+                }
+                Interaction::Hovered => {
+                    if focused_input.input_type != FocusedInputType::SettingsIdentityUrl {
+                        *bg_color = Color::srgb(0.12, 0.12, 0.17).into();
+                        border_color.0 = Color::srgb(0.5, 0.5, 0.9);
+                    }
+                }
+                Interaction::None => {
+                    if focused_input.input_type != FocusedInputType::SettingsIdentityUrl {
+                        *bg_color = Color::srgb(0.1, 0.1, 0.15).into();
+                        border_color.0 = Color::srgb(0.4, 0.4, 0.8);
+                    }
+                }
+            }
+        }
+        // Check if this is the save button
+        else if save_query.contains(entity) {
+            match *interaction {
+                Interaction::Pressed => {
+                    if settings_state.has_changes {
+                        api_settings.operations_base_url = settings_state.operations_url_draft.clone();
+                        api_settings.identity_base_url = settings_state.identity_url_draft.clone();
+                        settings_state.has_changes = false;
+                        
+                        info!("Settings saved:");
+                        info!("  Operations URL: {}", api_settings.operations_base_url);
+                        info!("  Identity URL: {}", api_settings.identity_base_url);
+                    }
+                    
+                    *bg_color = Color::srgb(0.1, 0.5, 0.1).into();
+                    border_color.0 = Color::srgb(0.0, 1.0, 0.0);
+                }
+                Interaction::Hovered => {
+                    if settings_state.has_changes {
+                        *bg_color = Color::srgb(0.2, 0.7, 0.2).into();
+                        border_color.0 = Color::WHITE;
+                    } else {
+                        *bg_color = Color::srgb(0.3, 0.3, 0.3).into();
+                        border_color.0 = Color::srgb(0.5, 0.5, 0.5);
+                    }
+                }
+                Interaction::None => {
+                    if settings_state.has_changes {
+                        *bg_color = Color::srgb(0.15, 0.6, 0.15).into();
+                        border_color.0 = Color::BLACK;
+                    } else {
+                        *bg_color = Color::srgb(0.2, 0.2, 0.2).into();
+                        border_color.0 = Color::srgb(0.3, 0.3, 0.3);
+                    }
+                }
+            }
+        }
+    }
+
+    // Handle keyboard input for focused fields
+    if let Some(focused_entity) = focused_input.entity {
+        let mut url_changed = false;
+
+        // Get current URL based on focused field
+        let mut current_url = match focused_input.input_type {
+            FocusedInputType::SettingsOperationsUrl => {
+                settings_state.operations_url_draft.clone()
+            }
+            FocusedInputType::SettingsIdentityUrl => {
+                settings_state.identity_url_draft.clone()
+            }
+            _ => return,
+        };
+
+        // Handle keyboard input
+        for key in keyboard_input.get_just_pressed() {
+            match key {
+                KeyCode::Backspace => {
+                    if !current_url.is_empty() {
+                        current_url.pop();
+                        url_changed = true;
+                    }
+                }
+                KeyCode::Space => {
+                    current_url.push(' ');
+                    url_changed = true;
+                }
+                _ => {
+                    if let Some(char) = key_to_char(*key) {
+                        current_url.push(char);
+                        url_changed = true;
+                    }
+                }
+            }
+        }
+
+        if url_changed {
+            // Update the settings state
+            match focused_input.input_type {
+                FocusedInputType::SettingsOperationsUrl => {
+                    settings_state.operations_url_draft = current_url.clone();
+                    settings_state.has_changes = true;
+                }
+                FocusedInputType::SettingsIdentityUrl => {
+                    settings_state.identity_url_draft = current_url.clone();
+                    settings_state.has_changes = true;
+                }
+                _ => {}
+            }
+
+            // Update text display for the focused field
+            if let Ok(children) = children_query.get(focused_entity) {
+                if let Some(child) = children.first() {
+                    if let Ok(mut text) = text_query.get_mut(*child) {
+                        *text = Text::new(if current_url.is_empty() {
+                            "Enter URL..."
+                        } else {
+                            &current_url
+                        });
+                    }
+                }
+            }
+        }
+    }
+}
+
 
 pub struct WalletPlugin;
 
