@@ -1,0 +1,18 @@
+{
+  "name": "simple-wallet-connect",
+  "version": "1.0.0",
+  "description": "Simple HTML/JavaScript example for connecting wallet to GalaChain",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@gala-chain/connect": "^1.0.0"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0"
+  }
+}
+

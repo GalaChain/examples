@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GalaChain Wallet Connect - Simple Example</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .status {
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 4px;
+            background-color: #f0f0f0;
+        }
+        .error {
+            background-color: #ffebee;
+            color: #c62828;
+        }
+        .success {
+            background-color: #e8f5e9;
+            color: #2e7d32;
+        }
+        #address {
+            word-break: break-all;
+            font-family: monospace;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>GalaChain Wallet Connection</h1>
+    
+    <div id="status" class="status" style="display: none;"></div>
+    
+    <div id="wallet-section">
+        <button id="connectBtn" onclick="connectWallet()">Connect Wallet</button>
+        <div id="address" style="display: none; margin-top: 20px;"></div>
+        <button id="disconnectBtn" onclick="disconnectWallet()" style="display: none; margin-top: 10px; background-color: #f44336;">Disconnect</button>
+    </div>
+
+    <script type="module" src="wallet.js"></script>
+</body>
+</html>
+
